@@ -6,6 +6,90 @@ type HealthState = 'idle' | 'loading' | 'ok' | 'error'
 const fileInput = ref<HTMLInputElement | null>(null)
 const capturedImageUrl = ref<string | null>(null)
 const health = ref<HealthState>('idle')
+// Speech recognition state
+const recognizing = ref(false)
+const transcript = ref<string>('')
+const subtitles = ref<string[]>([])
+const recognitionSupported = ref<boolean>(typeof window !== 'undefined' && (!!(window as any).SpeechRecognition || !!(window as any).webkitSpeechRecognition))
+let recognition: any = null
+let shouldKeepRecognizing = false
+let debounceTimer: ReturnType<typeof setTimeout> | null = null
+let pendingFinalText = ''
+
+if (recognitionSupported.value) {
+  const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+  recognition = new SpeechRecognition()
+  // try to enable continuous; some implementations ignore it
+  recognition.continuous = true
+  recognition.lang = 'zh-TW'
+  recognition.interimResults = true
+  recognition.maxAlternatives = 1
+
+  recognition.onstart = () => {
+    recognizing.value = true
+  }
+
+  recognition.onresult = (event: any) => {
+    let interim = ''
+    let final = ''
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const res = event.results[i]
+      if (res.isFinal) final += res[0].transcript
+      else interim += res[0].transcript
+    }
+    
+    // Update transcript with both final and interim for full display
+    if (final.trim()) {
+      transcript.value = (transcript.value + ' ' + final).trim()
+      pendingFinalText = final.trim()
+      
+      // Debounce subtitle updates - only add to subtitles after text is stable
+      if (debounceTimer) clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(() => {
+        if (pendingFinalText.trim()) {
+          subtitles.value.push(pendingFinalText.trim())
+          pendingFinalText = ''
+        }
+      }, 700)
+    }
+    
+    // Show interim results only in transcript, not in subtitles
+    if (interim.trim()) {
+      // Don't modify transcript with interim to avoid duplication
+      // Just let user see interim in real-time without adding to history
+    }
+  }
+
+  recognition.onerror = (e: any) => {
+    console.error('Speech recognition error', e)
+  }
+
+  recognition.onend = () => {
+    recognizing.value = false
+    
+    // Flush any pending final text immediately when recognition ends
+    if (debounceTimer) {
+      clearTimeout(debounceTimer)
+      debounceTimer = null
+    }
+    if (pendingFinalText.trim()) {
+      subtitles.value.push(pendingFinalText.trim())
+      pendingFinalText = ''
+    }
+    
+    // If user requested continuous recognition, restart after a small delay
+    if (shouldKeepRecognizing) {
+      setTimeout(() => {
+        try {
+          recognition.start()
+        } catch (e) {
+          // some browsers may throw if start called immediately; ignore and try again later
+          console.warn('restart recognition failed', e)
+        }
+      }, 200)
+    }
+  }
+}
 
 function openCameraPicker() {
   fileInput.value?.click()
@@ -24,6 +108,38 @@ function backToCapture() {
   if (capturedImageUrl.value) URL.revokeObjectURL(capturedImageUrl.value)
   capturedImageUrl.value = null
   health.value = 'idle'
+}
+
+function toggleRecognition() {
+  if (!recognitionSupported.value) return
+  if (recognizing.value) {
+    // user requested stop
+    shouldKeepRecognizing = false
+    
+    // Clean up debounce timer and flush pending text
+    if (debounceTimer) {
+      clearTimeout(debounceTimer)
+      debounceTimer = null
+    }
+    if (pendingFinalText.trim()) {
+      subtitles.value.push(pendingFinalText.trim())
+      pendingFinalText = ''
+    }
+    
+    recognition.stop()
+  } else {
+    // user requested start; enable keep-alive behavior
+    shouldKeepRecognizing = true
+    try {
+      recognition.start()
+    } catch (e) {
+      console.warn('recognition start error', e)
+      // sometimes recognition needs a tiny delay before starting
+      setTimeout(() => {
+        try { recognition.start() } catch (e) { console.warn('second start failed', e) }
+      }, 200)
+    }
+  }
 }
 
 async function checkBackendHealth() {
@@ -45,6 +161,13 @@ async function checkBackendHealth() {
   <main class="min-h-full grid grid-rows-[1fr_auto]">
     <section class="p-4 pb-2 flex items-center justify-center">
       <div class="w-full max-w-sm">
+        <!-- Speech transcript area -->
+        <div class="mb-4">
+          <div class="w-full rounded-2xl bg-neutral-100 dark:bg-neutral-900 p-4 text-center">
+            <p class="text-sm opacity-80">語音辨識</p>
+            <p class="mt-2 text-base break-words" aria-live="polite">{{ transcript || '尚未辨識到語音' }}</p>
+          </div>
+        </div>
         <template v-if="!capturedImageUrl">
           <div class="aspect-[3/4] rounded-2xl bg-neutral-200 dark:bg-neutral-800 flex items-center justify-center text-center p-4">
             <p class="text-sm opacity-80">點擊下方按鈕開啟相機（不需 HTTPS）</p>
@@ -72,6 +195,35 @@ async function checkBackendHealth() {
     </section>
 
     <nav class="sticky bottom-0 p-4 grid grid-cols-3 gap-3">
+      <!-- Large microphone button for accessibility -->
+      <button
+        class="col-span-3 h-20 rounded-full bg-red-600 text-white text-2xl shadow-md active:scale-[0.98] flex items-center justify-center"
+        :aria-pressed="recognizing"
+        :aria-label="recognitionSupported ? (recognizing ? '停止語音辨識' : '啟動語音辨識') : '語音辨識不支援'"
+        :disabled="!recognitionSupported"
+        @click="toggleRecognition"
+      >
+        <span v-if="!recognitionSupported">🎤 不支援</span>
+        <span v-else>
+          <span v-if="recognizing">停&nbsp;止</span>
+          <span v-else>開始偵測</span>
+        </span>
+      </button>
+
+      <!-- Live region for screen readers (visually hidden) -->
+      <div class="sr-only" aria-live="polite">{{ recognizing ? '麥克風已開啟' : '麥克風已關閉' }}</div>
+
+      <!-- Subtitle sliding window (overlay at bottom) -->
+      <div aria-hidden="false" class="col-span-3 pointer-events-none">
+        <div class="subtitle-window fixed left-1/2 transform -translate-x-1/2 bottom-36 w-full max-w-2xl px-4">
+          <div class="space-y-2">
+            <div v-for="(s, idx) in subtitles.slice(-5)" :key="idx" class="subtitle-item">
+              {{ s }}
+            </div>
+          </div>
+        </div>
+      </div>
+
       <button
         v-if="capturedImageUrl"
         class="col-span-1 h-14 rounded-xl bg-neutral-100 dark:bg-neutral-800 border border-neutral-200/70 dark:border-neutral-700 active:scale-[0.98]"
@@ -104,4 +256,40 @@ async function checkBackendHealth() {
 </template>
 
 <style scoped>
+.subtitle-window {
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  z-index: 60;
+}
+.subtitle-window .space-y-2 {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 0.5rem;
+  align-items: center;
+}
+.subtitle-item {
+  background: rgba(0,0,0,0.75);
+  color: white;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 1.125rem;
+  line-height: 1.2;
+  max-width: 90%;
+  text-align: center;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+  pointer-events: none;
+  animation: slideInUp 360ms cubic-bezier(.22,.9,.31,1) both;
+}
+
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
 </style>
