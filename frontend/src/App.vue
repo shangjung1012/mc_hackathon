@@ -8,6 +8,7 @@ const videoEl = ref<HTMLVideoElement | null>(null)
 let mediaStream: MediaStream | null = null
 const cameraReady = ref(false)
 const cameraError = ref<string | null>(null)
+const cameraActivated = ref(false)
 const health = ref<HealthState>('idle')
 // Speech recognition state
 const recognizing = ref(false)
@@ -45,6 +46,15 @@ if (recognitionSupported.value) {
     if (final.trim()) {
       transcript.value = (transcript.value + ' ' + final).trim()
       pendingFinalText = final.trim()
+
+      // Keyword detection: 開啟拍照模式
+      try {
+        const text = final.trim()
+        if (!cameraActivated.value && text.includes('開啟拍照模式')) {
+          cameraActivated.value = true
+          startCamera()
+        }
+      } catch {}
       
       // Debounce subtitle updates - only add to subtitles after text is stable
       if (debounceTimer) clearTimeout(debounceTimer)
@@ -152,10 +162,16 @@ function backToCapture() {
 }
 
 onMounted(() => {
-  if (navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function') {
-    startCamera()
-  } else {
-    cameraError.value = '此裝置或瀏覽器不支援相機存取'
+  // Auto-start continuous speech recognition loop
+  if (recognitionSupported.value) {
+    shouldKeepRecognizing = true
+    try {
+      recognition.start()
+    } catch (e) {
+      setTimeout(() => {
+        try { recognition.start() } catch {}
+      }, 200)
+    }
   }
 })
 
@@ -221,7 +237,7 @@ async function checkBackendHealth() {
             <p class="mt-2 text-base break-words" aria-live="polite">{{ transcript || '尚未辨識到語音' }}</p>
           </div>
         </div>
-        <div class="relative">
+        <div v-if="cameraActivated" class="relative">
           <div class="aspect-[3/4] overflow-hidden rounded-2xl bg-neutral-200 dark:bg-neutral-800">
             <video ref="videoEl" playsinline muted class="w-full h-full object-cover"></video>
           </div>
@@ -229,6 +245,9 @@ async function checkBackendHealth() {
             正在開啟相機…
           </p>
           <p v-if="cameraError" class="mt-2 text-sm text-red-600">{{ cameraError }}</p>
+        </div>
+        <div v-else class="aspect-[3/4] rounded-2xl bg-neutral-200 dark:bg-neutral-800 flex items-center justify-center text-center p-4">
+          <p class="text-sm opacity-80">語音偵測中… 說「開啟拍照模式」以啟用相機</p>
         </div>
 
         <template v-if="capturedImageUrl">
@@ -290,6 +309,7 @@ async function checkBackendHealth() {
       </div>
 
       <button
+        v-if="cameraActivated"
         class="col-span-3 h-14 rounded-full bg-blue-600 text-white text-lg shadow-md active:scale-[0.98] disabled:opacity-60"
         aria-label="拍照"
         :disabled="!cameraReady || !!cameraError"
