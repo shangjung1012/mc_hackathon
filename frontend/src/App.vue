@@ -19,6 +19,11 @@ let recognition: any = null
 let shouldKeepRecognizing = false
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let pendingFinalText = ''
+// Shopping mode state
+const shoppingMode = ref(false)
+let collectingWish = false
+let currentWish = ''
+let wishDebounceTimer: ReturnType<typeof setTimeout> | null = null
 type PermissionState = 'granted' | 'denied' | 'prompt' | 'unsupported'
 const micPermission = ref<PermissionState>('unsupported')
 let micPermissionWatcher: any | null = null
@@ -66,9 +71,51 @@ if (recognitionSupported.value) {
       transcript.value = (transcript.value + ' ' + final).trim()
       pendingFinalText = final.trim()
 
-      // Keyword detection: 開啟拍照模式
+      // Keyword detection: shopping mode and related commands
       try {
         const text = final.trim()
+        // 開啟逛街模式
+        if (!shoppingMode.value && (text.includes('開啟逛街模式') || text.includes('開始逛街模式'))) {
+          shoppingMode.value = true
+          cameraActivated.value = true
+          // start camera and immediately take photo and notify backend with action=open
+          startCamera().then(() => {
+            setTimeout(() => {
+              takePhotoAndSend('open', null)
+            }, 500)
+          })
+        }
+
+        // Detect user wants (start collecting after keyword 我想要)
+        if (shoppingMode.value && text.includes('我想要')) {
+          collectingWish = true
+          const idx = text.indexOf('我想要')
+          const after = text.slice(idx + 3).trim()
+          if (after) {
+            currentWish += (currentWish ? ' ' : '') + after
+          }
+          if (wishDebounceTimer) clearTimeout(wishDebounceTimer)
+          wishDebounceTimer = setTimeout(() => {
+            if (currentWish.trim()) {
+              takePhotoAndSend('shopping', currentWish.trim())
+            }
+            currentWish = ''
+            collectingWish = false
+            wishDebounceTimer = null
+          }, 1200)
+        }
+
+        // 結束逛街模式
+        if (shoppingMode.value && (text.includes('結束逛街模式') || text.includes('離開逛街模式'))) {
+          takePhotoAndSend('close', null)
+          shoppingMode.value = false
+          collectingWish = false
+          currentWish = ''
+          if (wishDebounceTimer) { clearTimeout(wishDebounceTimer); wishDebounceTimer = null }
+          stopCamera()
+        }
+
+        // 保留原先開啟拍照模式關鍵字
         if (!cameraActivated.value && text.includes('開啟拍照模式')) {
           cameraActivated.value = true
           startCamera()
@@ -186,6 +233,51 @@ function backToCapture() {
   if (capturedImageUrl.value) URL.revokeObjectURL(capturedImageUrl.value)
   capturedImageUrl.value = null
   health.value = 'idle'
+}
+
+// helper: take photo blob and send to backend /gemini/analyze with action
+async function takePhotoAndSend(action: string, text: string | null) {
+  if (!videoEl.value) return
+  try {
+    const video = videoEl.value
+    const canvas = document.createElement('canvas')
+    const vw = video.videoWidth || 1080
+    const vh = video.videoHeight || 1440
+    canvas.width = vw
+    canvas.height = vh
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.drawImage(video, 0, 0, vw, vh)
+    const blob: Blob | null = await new Promise(resolve => canvas.toBlob(b => resolve(b), 'image/jpeg', 0.9))
+    if (!blob) return
+
+    // update captured preview
+    if (capturedImageUrl.value) URL.revokeObjectURL(capturedImageUrl.value)
+    const url = URL.createObjectURL(blob)
+    capturedImageUrl.value = url
+
+    // build form data
+    const host = window.location.hostname || '127.0.0.1'
+    const apiUrl = `http://${host}:8000/gemini/analyze`
+    const fd = new FormData()
+    fd.append('action', action)
+    if (text) fd.append('text', text)
+    fd.append('image', new File([blob], 'photo.jpg', { type: 'image/jpeg' }))
+
+    health.value = 'loading'
+    try {
+      const res = await fetch(apiUrl, { method: 'POST', body: fd })
+      if (!res.ok) throw new Error(String(res.status))
+      const data = await res.json()
+      health.value = 'ok'
+      console.log('analyze result', data)
+    } catch (e) {
+      console.error('analyze failed', e)
+      health.value = 'error'
+    }
+  } catch (e) {
+    console.error('takePhotoAndSend failed', e)
+  }
 }
 
 onMounted(() => {

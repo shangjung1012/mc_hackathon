@@ -32,6 +32,7 @@ def _read_upload_bytes(upload: UploadFile) -> tuple[bytes, str]:
 async def analyze(
     image: Optional[UploadFile] = File(default=None),
     text: Optional[str] = Form(default=None),
+    action: Optional[str] = Form(default=None),
     model: str = Form(default="gemini-2.5-flash"),
 ):
     """Accepts an image or webpage URL with optional text, then calls Gemini."""
@@ -50,6 +51,10 @@ async def analyze(
 
     if text:
         contents.append(text)
+
+    # Include action as context if provided (e.g., open/shopping/close)
+    if action:
+        contents.append(f"[action]={action}")
 
     try:
         config = types.GenerateContentConfig(
