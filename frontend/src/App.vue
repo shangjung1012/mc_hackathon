@@ -22,6 +22,19 @@ let pendingFinalText = ''
 type PermissionState = 'granted' | 'denied' | 'prompt' | 'unsupported'
 const micPermission = ref<PermissionState>('unsupported')
 let micPermissionWatcher: any | null = null
+const cameraPermission = ref<PermissionState>('unsupported')
+let cameraPermissionWatcher: any | null = null
+
+async function refreshPermissionsFromDevices() {
+  try {
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.enumerateDevices !== 'function') return
+    const devices = await navigator.mediaDevices.enumerateDevices()
+    const hasLabeledMic = devices.some(d => d.kind === 'audioinput' && !!d.label)
+    const hasLabeledCam = devices.some(d => d.kind === 'videoinput' && !!d.label)
+    if (hasLabeledMic) micPermission.value = 'granted'
+    if (hasLabeledCam) cameraPermission.value = 'granted'
+  } catch {}
+}
 
 if (recognitionSupported.value) {
   const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
@@ -34,6 +47,9 @@ if (recognitionSupported.value) {
 
   recognition.onstart = () => {
     recognizing.value = true
+    // On many mobile browsers, Permissions API for microphone is unreliable
+    // Mark mic as granted when recognition actually starts
+    micPermission.value = 'granted'
   }
 
   recognition.onresult = (event: any) => {
@@ -120,9 +136,17 @@ async function startCamera() {
       await videoEl.value.play()
       cameraReady.value = true
     }
+    // If we successfully obtained video, treat permission as granted
+    cameraPermission.value = 'granted'
+    // Try also to refresh from device labels (iOS Safari quirk)
+    refreshPermissionsFromDevices()
   } catch (e: any) {
     cameraError.value = e?.message || '無法開啟相機（需要 HTTPS 或權限）'
     cameraReady.value = false
+    const name = e?.name || ''
+    if (name === 'NotAllowedError' || name === 'SecurityError') {
+      cameraPermission.value = 'denied'
+    }
   }
 }
 
@@ -179,12 +203,19 @@ onMounted(() => {
 
   // Check microphone permission state
   checkMicPermission()
+  // Check camera permission state
+  checkCameraPermission()
+  // Best-effort: try to infer permissions by checking labeled devices (works after first grant)
+  setTimeout(() => { refreshPermissionsFromDevices() }, 300)
 })
 
 onBeforeUnmount(() => {
   stopCamera()
   if (micPermissionWatcher && typeof micPermissionWatcher.onchange === 'function') {
     micPermissionWatcher.onchange = null
+  }
+  if (cameraPermissionWatcher && typeof cameraPermissionWatcher.onchange === 'function') {
+    cameraPermissionWatcher.onchange = null
   }
 })
 
@@ -254,6 +285,23 @@ async function checkMicPermission() {
     micPermission.value = 'unsupported'
   }
 }
+
+async function checkCameraPermission() {
+  try {
+    if (!navigator.permissions || typeof navigator.permissions.query !== 'function') {
+      cameraPermission.value = 'unsupported'
+      return
+    }
+    const status = await navigator.permissions.query({ name: 'camera' as PermissionName })
+    cameraPermission.value = status.state as PermissionState
+    cameraPermissionWatcher = status
+    status.onchange = () => {
+      cameraPermission.value = status.state as PermissionState
+    }
+  } catch {
+    cameraPermission.value = 'unsupported'
+  }
+}
 </script>
 
 <template>
@@ -273,6 +321,16 @@ async function checkMicPermission() {
                 'text-blue-600': micPermission==='prompt',
               }">
                 {{ micPermission === 'unsupported' ? '未知/不支援' : micPermission === 'granted' ? '已允許' : micPermission === 'denied' ? '已拒絕' : '等待授權' }}
+              </span>
+            </p>
+            <p class="mt-1 text-xs opacity-70">
+              相機權限：
+              <span :class="{
+                'text-green-600': cameraPermission==='granted',
+                'text-red-600': cameraPermission==='denied',
+                'text-blue-600': cameraPermission==='prompt',
+              }">
+                {{ cameraPermission === 'unsupported' ? '未知/不支援' : cameraPermission === 'granted' ? '已允許' : cameraPermission === 'denied' ? '已拒絕' : '等待授權' }}
               </span>
             </p>
           </div>
