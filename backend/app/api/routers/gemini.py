@@ -1,19 +1,18 @@
 from typing import Optional
-
-import os
-import requests
+import os, requests
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-import google.generativeai as genai
-
+from google import genai
+from google.genai import types
+from .system_prompt import SYSTEM_PROMPT
 
 router = APIRouter(prefix="/gemini", tags=["gemini"])
 
 
-def _configure_genai() -> None:
+def _client() -> genai.Client:
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="GOOGLE_API_KEY is not set")
-    genai.configure(api_key=api_key)
+    return genai.Client(api_key=api_key)
 
 
 def _read_upload_bytes(upload: UploadFile) -> tuple[bytes, str]:
@@ -28,57 +27,41 @@ def _read_upload_bytes(upload: UploadFile) -> tuple[bytes, str]:
     return data, mime
 
 
-def _fetch_url_text(url: str, timeout_seconds: int = 10) -> str:
-    try:
-        resp = requests.get(url, timeout=timeout_seconds)
-        resp.raise_for_status()
-        text = resp.text
-        # Truncate overly long pages to keep request small
-        return text[:200_000]
-    except requests.RequestException as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to fetch URL: {exc}")
-
-
 @router.post("/analyze")
 async def analyze(
     image: Optional[UploadFile] = File(default=None),
-    url: Optional[str] = Form(default=None),
     text: Optional[str] = Form(default=None),
-    system_prompt: Optional[str] = Form(default=None),
     model: str = Form(default="gemini-2.5-flash"),
 ):
-    """Accepts an image or webpage URL with optional text and system prompt, then calls Gemini."""
+    """Accepts an image or webpage URL with optional text, then calls Gemini."""
     # Require at least one of image or text. URL is optional and additive.
     if not image and not text:
         raise HTTPException(status_code=400, detail="Provide at least one of image or text")
 
-    _configure_genai()
+    client = _client()
 
     contents: list[object] = []
 
-    if system_prompt:
-        contents.append(system_prompt)
-
     if image:
         data, mime = _read_upload_bytes(image)
-        contents.append({"mime_type": mime, "data": data})
+        contents.append(types.Part.from_bytes(data=data, mime_type=mime))
 
-    if url:
-        page_text = _fetch_url_text(url)
-        contents.append(f"Webpage URL: {url}\n\nContent:\n{page_text}")
 
     if text:
         contents.append(text)
 
     try:
-        generative_model = genai.GenerativeModel(model_name=model)
-        response = generative_model.generate_content(contents=contents)
-        result_text = getattr(response, "text", None)
-        if not result_text:
-            # Fallback: join candidates if available
-            result_text = str(response)
-        return {"result": result_text}
+        config = types.GenerateContentConfig(
+            system_instruction = SYSTEM_PROMPT,
+            thinking_config=types.ThinkingConfig(thinking_budget=-1)
+        )
+
+        resp = client.models.generate_content(
+            model=model,
+            contents=contents,
+            config=config,
+        )
+        return {"result": getattr(resp, "text", str(resp))}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Gemini request failed: {exc}")
-
 
