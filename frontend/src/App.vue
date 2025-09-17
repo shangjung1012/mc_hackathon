@@ -36,6 +36,16 @@ let micPermissionWatcher: any | null = null
 const cameraPermission = ref<PermissionState>('unsupported')
 let cameraPermissionWatcher: any | null = null
 
+// API base from Vite env, fallback to localhost
+const API_BASE = (import.meta.env.VITE_API_BASE || import.meta.env.VITE_BACKEND_URL || '') as string
+function resolveApiUrl(path: string) {
+  if (API_BASE && API_BASE.trim()) {
+    return API_BASE.replace(/\/$/, '') + path
+  }
+  const host = window.location.hostname || '127.0.0.1'
+  return `http://${host}:8000${path}`
+}
+
 async function refreshPermissionsFromDevices() {
   try {
     if (!navigator.mediaDevices || typeof navigator.mediaDevices.enumerateDevices !== 'function') return
@@ -281,8 +291,7 @@ async function takePhotoAndSend(action: string, text: string | null) {
     capturedImageUrl.value = url
 
     // build form data
-    const host = window.location.hostname || '127.0.0.1'
-    const apiUrl = `http://${host}:8000/gemini/analyze`
+  const apiUrl = resolveApiUrl('/gemini/analyze')
     const fd = new FormData()
     fd.append('action', action)
     if (text) fd.append('text', text)
@@ -380,8 +389,7 @@ function toggleRecognition() {
 
 async function checkBackendHealth() {
   health.value = 'loading'
-  const host = window.location.hostname || '127.0.0.1'
-  const url = `http://${host}:8000/health`
+  const url = resolveApiUrl('/health')
   try {
     const res = await fetch(url, { method: 'GET' })
     if (!res.ok) throw new Error(String(res.status))
