@@ -19,6 +19,9 @@ let recognition: any = null
 let shouldKeepRecognizing = false
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let pendingFinalText = ''
+type PermissionState = 'granted' | 'denied' | 'prompt' | 'unsupported'
+const micPermission = ref<PermissionState>('unsupported')
+let micPermissionWatcher: any | null = null
 
 if (recognitionSupported.value) {
   const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
@@ -173,14 +176,24 @@ onMounted(() => {
       }, 200)
     }
   }
+
+  // Check microphone permission state
+  checkMicPermission()
 })
 
 onBeforeUnmount(() => {
   stopCamera()
+  if (micPermissionWatcher && typeof micPermissionWatcher.onchange === 'function') {
+    micPermissionWatcher.onchange = null
+  }
 })
 
 function toggleRecognition() {
   if (!recognitionSupported.value) return
+  if (micPermission.value === 'denied') {
+    alert('麥克風權限被拒絕，請至瀏覽器設定開啟麥克風權限')
+    return
+  }
   if (recognizing.value) {
     // user requested stop
     shouldKeepRecognizing = false
@@ -224,6 +237,23 @@ async function checkBackendHealth() {
     health.value = 'error'
   }
 }
+
+async function checkMicPermission() {
+  try {
+    if (!navigator.permissions || typeof navigator.permissions.query !== 'function') {
+      micPermission.value = 'unsupported'
+      return
+    }
+    const status = await navigator.permissions.query({ name: 'microphone' as PermissionName })
+    micPermission.value = status.state as PermissionState
+    micPermissionWatcher = status
+    status.onchange = () => {
+      micPermission.value = status.state as PermissionState
+    }
+  } catch {
+    micPermission.value = 'unsupported'
+  }
+}
 </script>
 
 <template>
@@ -235,6 +265,16 @@ async function checkBackendHealth() {
           <div class="w-full rounded-2xl bg-neutral-100 dark:bg-neutral-900 p-4 text-center">
             <p class="text-sm opacity-80">語音辨識</p>
             <p class="mt-2 text-base break-words" aria-live="polite">{{ transcript || '尚未辨識到語音' }}</p>
+            <p class="mt-2 text-xs opacity-70">
+              麥克風權限：
+              <span :class="{
+                'text-green-600': micPermission==='granted',
+                'text-red-600': micPermission==='denied',
+                'text-blue-600': micPermission==='prompt',
+              }">
+                {{ micPermission === 'unsupported' ? '未知/不支援' : micPermission === 'granted' ? '已允許' : micPermission === 'denied' ? '已拒絕' : '等待授權' }}
+              </span>
+            </p>
           </div>
         </div>
         <div v-if="cameraActivated" class="relative">
