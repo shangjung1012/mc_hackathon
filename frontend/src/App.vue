@@ -24,6 +24,12 @@ const shoppingMode = ref(false)
 let collectingWish = false
 let currentWish = ''
 let wishDebounceTimer: ReturnType<typeof setTimeout> | null = null
+// TTS / live region for accessibility
+const liveMessage = ref<string>('')
+
+// Recognition restart/backoff state
+let restartAttempts = 0
+const maxRestartAttempts = 6
 type PermissionState = 'granted' | 'denied' | 'prompt' | 'unsupported'
 const micPermission = ref<PermissionState>('unsupported')
 let micPermissionWatcher: any | null = null
@@ -156,17 +162,35 @@ if (recognitionSupported.value) {
       pendingFinalText = ''
     }
     
-    // If user requested continuous recognition, restart after a small delay
+    // Robust restart: only restart if requested; use backoff to avoid busy-loop failures
     if (shouldKeepRecognizing) {
+      restartAttempts = Math.min(maxRestartAttempts, restartAttempts + 1)
+      const backoffMs = Math.min(200 * Math.pow(2, restartAttempts - 1), 5000)
       setTimeout(() => {
         try {
           recognition.start()
+          // success: reset attempts
+          restartAttempts = 0
         } catch (e) {
-          // some browsers may throw if start called immediately; ignore and try again later
           console.warn('restart recognition failed', e)
         }
-      }, 200)
+      }, backoffMs)
     }
+  }
+}
+
+function speakText(text: string) {
+  try {
+    if (!('speechSynthesis' in window)) return
+    const utter = new SpeechSynthesisUtterance(text)
+    utter.lang = 'zh-TW'
+    // Optional: adjust rate/volume if needed for clarity
+    utter.rate = 1.0
+    utter.volume = 1.0
+    window.speechSynthesis.cancel()
+    window.speechSynthesis.speak(utter)
+  } catch (e) {
+    console.warn('TTS failed', e)
   }
 }
 
@@ -271,9 +295,16 @@ async function takePhotoAndSend(action: string, text: string | null) {
       const data = await res.json()
       health.value = 'ok'
       console.log('analyze result', data)
+      // announce result for accessibility
+      const spoken = typeof data?.result === 'string' ? data.result : JSON.stringify(data.result)
+      liveMessage.value = spoken
+      speakText(spoken)
     } catch (e) {
       console.error('analyze failed', e)
       health.value = 'error'
+      const errMsg = '伺服器回應失敗'
+      liveMessage.value = errMsg
+      speakText(errMsg)
     }
   } catch (e) {
     console.error('takePhotoAndSend failed', e)
@@ -398,6 +429,8 @@ async function checkCameraPermission() {
 
 <template>
   <main class="min-h-full grid grid-rows-[1fr_auto]">
+    <!-- Live region for screen readers: announce API/TTS results -->
+    <div class="sr-only" aria-live="polite">{{ liveMessage }}</div>
     <section class="p-4 pb-2 flex items-center justify-center">
       <div class="w-full max-w-sm">
         <!-- Speech transcript area -->
