@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 
 type HealthState = 'idle' | 'loading' | 'ok' | 'error'
 
-const fileInput = ref<HTMLInputElement | null>(null)
 const capturedImageUrl = ref<string | null>(null)
+const videoEl = ref<HTMLVideoElement | null>(null)
+let mediaStream: MediaStream | null = null
+const cameraReady = ref(false)
+const cameraError = ref<string | null>(null)
 const health = ref<HealthState>('idle')
 // Speech recognition state
 const recognizing = ref(false)
@@ -91,17 +94,55 @@ if (recognitionSupported.value) {
   }
 }
 
-function openCameraPicker() {
-  fileInput.value?.click()
+async function startCamera() {
+  try {
+    cameraError.value = null
+    // Request back camera when available
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 1706 } },
+      audio: false,
+    })
+    if (videoEl.value) {
+      videoEl.value.srcObject = mediaStream
+      await videoEl.value.play()
+      cameraReady.value = true
+    }
+  } catch (e: any) {
+    cameraError.value = e?.message || '無法開啟相機（需要 HTTPS 或權限）'
+    cameraReady.value = false
+  }
 }
 
-function onFileChange(e: Event) {
-  const input = e.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) return
-  if (navigator.vibrate) navigator.vibrate(10)
-  capturedImageUrl.value = URL.createObjectURL(file)
-  checkBackendHealth()
+function stopCamera() {
+  if (mediaStream) {
+    mediaStream.getTracks().forEach(t => t.stop())
+    mediaStream = null
+  }
+  cameraReady.value = false
+}
+
+async function takePhoto() {
+  if (!videoEl.value) return
+  try {
+    const video = videoEl.value
+    const canvas = document.createElement('canvas')
+    const vw = video.videoWidth || 1080
+    const vh = video.videoHeight || 1440
+    canvas.width = vw
+    canvas.height = vh
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.drawImage(video, 0, 0, vw, vh)
+    const blob: Blob | null = await new Promise(resolve => canvas.toBlob(b => resolve(b), 'image/jpeg', 0.9))
+    if (!blob) return
+    if (capturedImageUrl.value) URL.revokeObjectURL(capturedImageUrl.value)
+    const url = URL.createObjectURL(blob)
+    if (navigator.vibrate) navigator.vibrate(10)
+    capturedImageUrl.value = url
+    checkBackendHealth()
+  } catch (e) {
+    console.error('takePhoto failed', e)
+  }
 }
 
 function backToCapture() {
@@ -109,6 +150,18 @@ function backToCapture() {
   capturedImageUrl.value = null
   health.value = 'idle'
 }
+
+onMounted(() => {
+  if (navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function') {
+    startCamera()
+  } else {
+    cameraError.value = '此裝置或瀏覽器不支援相機存取'
+  }
+})
+
+onBeforeUnmount(() => {
+  stopCamera()
+})
 
 function toggleRecognition() {
   if (!recognitionSupported.value) return
@@ -168,13 +221,20 @@ async function checkBackendHealth() {
             <p class="mt-2 text-base break-words" aria-live="polite">{{ transcript || '尚未辨識到語音' }}</p>
           </div>
         </div>
-        <template v-if="!capturedImageUrl">
-          <div class="aspect-[3/4] rounded-2xl bg-neutral-200 dark:bg-neutral-800 flex items-center justify-center text-center p-4">
-            <p class="text-sm opacity-80">點擊下方按鈕開啟相機（不需 HTTPS）</p>
+        <div class="relative">
+          <div class="aspect-[3/4] overflow-hidden rounded-2xl bg-neutral-200 dark:bg-neutral-800">
+            <video ref="videoEl" playsinline muted class="w-full h-full object-cover"></video>
           </div>
-        </template>
-        <template v-else>
-          <img :src="capturedImageUrl" alt="captured" class="w-full rounded-2xl object-cover aspect-[3/4]" />
+          <p v-if="!cameraReady && !cameraError" class="absolute inset-0 grid place-items-center text-sm opacity-80">
+            正在開啟相機…
+          </p>
+          <p v-if="cameraError" class="mt-2 text-sm text-red-600">{{ cameraError }}</p>
+        </div>
+
+        <template v-if="capturedImageUrl">
+          <div class="mt-3">
+            <img :src="capturedImageUrl" alt="captured" class="w-full rounded-2xl object-cover aspect-[3/4]" />
+          </div>
           <div class="mt-3 rounded-xl border border-neutral-200/70 dark:border-neutral-700 p-3 flex items-center justify-between bg-neutral-50 dark:bg-neutral-900">
             <div>
               <p class="text-sm opacity-70">後端健康檢查</p>
@@ -186,9 +246,14 @@ async function checkBackendHealth() {
                 {{ health === 'idle' ? '尚未檢查' : health === 'loading' ? '檢查中…' : health === 'ok' ? '連線正常' : '連線失敗' }}
               </p>
             </div>
-            <button class="h-10 px-4 rounded-lg bg-neutral-100 dark:bg-neutral-800 border border-neutral-200/70 dark:border-neutral-700 active:scale-[0.98]" @click="checkBackendHealth">
-              重新檢查
-            </button>
+            <div class="flex items-center gap-2">
+              <button class="h-10 px-4 rounded-lg bg-neutral-100 dark:bg-neutral-800 border border-neutral-200/70 dark:border-neutral-700 active:scale-[0.98]" @click="checkBackendHealth">
+                重新檢查
+              </button>
+              <button class="h-10 px-3 rounded-lg bg-neutral-100 dark:bg-neutral-800 border border-neutral-200/70 dark:border-neutral-700 active:scale-[0.98]" @click="backToCapture">
+                清除截圖
+              </button>
+            </div>
           </div>
         </template>
       </div>
@@ -225,31 +290,13 @@ async function checkBackendHealth() {
       </div>
 
       <button
-        v-if="capturedImageUrl"
-        class="col-span-1 h-14 rounded-xl bg-neutral-100 dark:bg-neutral-800 border border-neutral-200/70 dark:border-neutral-700 active:scale-[0.98]"
-        aria-label="返回"
-        @click="backToCapture"
-      >
-        ⬅️
-      </button>
-
-      <button
-        v-else
-        class="col-span-3 h-14 rounded-full bg-blue-600 text-white text-lg shadow-md active:scale-[0.98]"
+        class="col-span-3 h-14 rounded-full bg-blue-600 text-white text-lg shadow-md active:scale-[0.98] disabled:opacity-60"
         aria-label="拍照"
-        @click="openCameraPicker"
+        :disabled="!cameraReady || !!cameraError"
+        @click="takePhoto"
       >
         拍照
       </button>
-
-      <input
-        ref="fileInput"
-        type="file"
-        accept="image/*"
-        capture="environment"
-        class="hidden"
-        @change="onFileChange"
-      />
     </nav>
   </main>
   
