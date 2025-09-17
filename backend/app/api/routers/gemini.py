@@ -3,6 +3,7 @@ import os, requests
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from google import genai
 from google.genai import types
+from app.schemas.intents import Intent
 from .system_prompt import SYSTEM_PROMPT
 
 router = APIRouter(prefix="/gemini", tags=["gemini"])
@@ -52,8 +53,10 @@ async def analyze(
 
     try:
         config = types.GenerateContentConfig(
-            system_instruction = SYSTEM_PROMPT,
-            thinking_config=types.ThinkingConfig(thinking_budget=-1)
+            system_instruction=SYSTEM_PROMPT,
+            thinking_config=types.ThinkingConfig(thinking_budget=-1),
+            response_mime_type="application/json",
+            response_schema=Intent,
         )
 
         resp = client.models.generate_content(
@@ -61,6 +64,11 @@ async def analyze(
             contents=contents,
             config=config,
         )
+
+        # Prefer parsed structured output if available
+        if getattr(resp, "parsed", None) is not None:
+            return {"result": resp.parsed}
+        # Fallback to raw text JSON string
         return {"result": getattr(resp, "text", str(resp))}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Gemini request failed: {exc}")
