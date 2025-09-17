@@ -70,10 +70,27 @@ async def analyze(
             config=config,
         )
 
-        # Prefer parsed structured output if available
+        # Prefer parsed structured output, condensed to a single speech string for TTS
         if getattr(resp, "parsed", None) is not None:
-            return {"result": resp.parsed}
-        # Fallback to raw text JSON string
+            try:
+                parsed = resp.parsed
+                # Try attribute first (pydantic object), then dict-style
+                speech = getattr(parsed, "speech", None)
+                if speech is None and isinstance(parsed, dict):
+                    speech = parsed.get("speech")
+                # As a fallback, derive minimal text from available fields
+                if not speech:
+                    intent = getattr(parsed, "intent", None)
+                    utterance = getattr(parsed, "utterance", None)
+                    if intent is None and isinstance(parsed, dict):
+                        intent = parsed.get("intent")
+                    if utterance is None and isinstance(parsed, dict):
+                        utterance = parsed.get("utterance")
+                    speech = (f"{intent or ''}: {utterance or ''}").strip(": ")
+                return {"result": speech}
+            except Exception:
+                pass
+        # Fallback to raw text string
         return {"result": getattr(resp, "text", str(resp))}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Gemini request failed: {exc}")
