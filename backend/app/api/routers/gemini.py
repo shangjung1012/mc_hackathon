@@ -33,7 +33,7 @@ async def analyze(
     image: Optional[UploadFile] = File(default=None),
     text: Optional[str] = Form(default=None),
     action: Optional[str] = Form(default=None),
-    model: str = Form(default="gemini-2.5-flash"),
+    model: str = Form(default="gemini-2.5-flash-lite"),
 ):
     """Accepts an image or webpage URL with optional text, then calls Gemini."""
     # Require at least one of image or text. URL is optional and additive.
