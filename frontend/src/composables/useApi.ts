@@ -8,7 +8,8 @@ export function useApi() {
       return String(API_BASE).replace(/\/$/, '') + path
     }
     const host = (typeof window !== 'undefined' && window.location?.hostname) || '127.0.0.1'
-    return `http://${host}:8000${path}`
+    const protocol = (typeof window !== 'undefined' && window.location?.protocol === 'https:') ? 'https' : 'http'
+    return `${protocol}://${host}:8000${path}`
   }
 
   async function checkBackendHealth(): Promise<HealthStatus> {
