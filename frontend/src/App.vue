@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { useApi } from './composables/useApi'
+import { useTTS } from './composables/useTTS'
+import { usePermissions } from './composables/usePermissions'
+import { useCamera } from './composables/useCamera'
 
 type HealthState = 'idle' | 'loading' | 'ok' | 'error'
 
 const capturedImageUrl = ref<string | null>(null)
-const videoEl = ref<HTMLVideoElement | null>(null)
-let mediaStream: MediaStream | null = null
-const cameraReady = ref(false)
-const cameraError = ref<string | null>(null)
+const { videoEl, cameraReady, cameraError, startCamera, stopCamera, captureFrame } = useCamera()
 const cameraActivated = ref(false)
 const health = ref<HealthState>('idle')
 // Speech recognition state
@@ -21,44 +22,20 @@ let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let pendingFinalText = ''
 // Shopping mode state
 const shoppingMode = ref(false)
-let collectingWish = false
 let currentWish = ''
 let wishDebounceTimer: ReturnType<typeof setTimeout> | null = null
 // TTS / live region for accessibility
 const liveMessage = ref<string>('')
-// TTS readiness and voice selection
-const ttsReady = ref(false)
-let selectedVoice: SpeechSynthesisVoice | null = null
+// TTS composable
+const { ttsReady, pickZhVoice, ensureTtsUnlocked, speakText } = useTTS()
 
 // Recognition restart/backoff state
 let restartAttempts = 0
 const maxRestartAttempts = 6
-type PermissionState = 'granted' | 'denied' | 'prompt' | 'unsupported'
-const micPermission = ref<PermissionState>('unsupported')
-let micPermissionWatcher: any | null = null
-const cameraPermission = ref<PermissionState>('unsupported')
-let cameraPermissionWatcher: any | null = null
+const { micPermission, cameraPermission, refreshPermissionsFromDevices, checkMicPermission, checkCameraPermission, cleanupPermissionWatchers } = usePermissions()
 
-// API base from Vite env, fallback to localhost
-const API_BASE = (import.meta.env.VITE_BACKEND_URL || '') as string
-function resolveApiUrl(path: string) {
-  if (API_BASE && API_BASE.trim()) {
-    return API_BASE.replace(/\/$/, '') + path
-  }
-  const host = window.location.hostname || '127.0.0.1'
-  return `http://${host}:8000${path}`
-}
-
-async function refreshPermissionsFromDevices() {
-  try {
-    if (!navigator.mediaDevices || typeof navigator.mediaDevices.enumerateDevices !== 'function') return
-    const devices = await navigator.mediaDevices.enumerateDevices()
-    const hasLabeledMic = devices.some(d => d.kind === 'audioinput' && !!d.label)
-    const hasLabeledCam = devices.some(d => d.kind === 'videoinput' && !!d.label)
-    if (hasLabeledMic) micPermission.value = 'granted'
-    if (hasLabeledCam) cameraPermission.value = 'granted'
-  } catch {}
-}
+// API helpers
+const { checkBackendHealth: apiCheckHealth, analyze } = useApi()
 
 if (recognitionSupported.value) {
   const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
@@ -98,7 +75,7 @@ if (recognitionSupported.value) {
           shoppingMode.value = true
           cameraActivated.value = true
           // start camera and immediately take photo and notify backend with action=open
-          startCamera().then(() => {
+          startCamera({ cameraPermissionRef: cameraPermission, refreshPermissionsFromDevices }).then(() => {
             setTimeout(() => {
               takePhotoAndSend('open', null)
             }, 500)
@@ -107,7 +84,6 @@ if (recognitionSupported.value) {
 
         // Detect user wants (start collecting after keyword 我想要)
         if (shoppingMode.value && text.includes('我想要')) {
-          collectingWish = true
           const idx = text.indexOf('我想要')
           const after = text.slice(idx + 3).trim()
           if (after) {
@@ -119,7 +95,6 @@ if (recognitionSupported.value) {
               takePhotoAndSend('shopping', currentWish.trim())
             }
             currentWish = ''
-            collectingWish = false
             wishDebounceTimer = null
           }, 1200)
         }
@@ -128,7 +103,6 @@ if (recognitionSupported.value) {
         if (shoppingMode.value && (text.includes('結束逛街模式') || text.includes('離開逛街模式'))) {
           takePhotoAndSend('close', null)
           shoppingMode.value = false
-          collectingWish = false
           currentWish = ''
           if (wishDebounceTimer) { clearTimeout(wishDebounceTimer); wishDebounceTimer = null }
           stopCamera()
@@ -137,7 +111,7 @@ if (recognitionSupported.value) {
         // 保留原先開啟拍照模式關鍵字
         if (!cameraActivated.value && text.includes('開啟拍照模式')) {
           cameraActivated.value = true
-          startCamera()
+          startCamera({ cameraPermissionRef: cameraPermission, refreshPermissionsFromDevices })
         }
       } catch {}
       
@@ -192,107 +166,20 @@ if (recognitionSupported.value) {
   }
 }
 
-function pickZhVoice() {
+function onTtsUnlockClick() {
   try {
-    if (!('speechSynthesis' in window)) return
-    const voices = window.speechSynthesis.getVoices() || []
-    const preferred = voices.find(v => /^(zh(-|_)TW|cmn-Hant-TW)/i.test(v.lang)) || voices.find(v => /^zh/i.test(v.lang))
-    selectedVoice = preferred || null
+    ensureTtsUnlocked()
+    if (ttsReady.value) liveMessage.value = '語音已啟用'
   } catch {}
-}
-
-function ensureTtsUnlocked() {
-  try {
-    if (!('speechSynthesis' in window)) return
-    const unlock = new SpeechSynthesisUtterance(' ')
-    unlock.volume = 0
-    unlock.rate = 1
-    if (selectedVoice) unlock.voice = selectedVoice
-    window.speechSynthesis.cancel()
-    window.speechSynthesis.resume()
-    window.speechSynthesis.speak(unlock)
-    ttsReady.value = true
-    liveMessage.value = '語音已啟用'
-  } catch {}
-}
-
-function speakText(text: string) {
-  try {
-    if (!('speechSynthesis' in window)) return
-    if (!ttsReady.value) {
-      ensureTtsUnlocked()
-      if (!ttsReady.value) return
-    }
-    const utter = new SpeechSynthesisUtterance(text)
-    utter.lang = 'zh-TW'
-    if (selectedVoice) utter.voice = selectedVoice
-    // Optional: adjust rate/volume if needed for clarity
-    utter.rate = 1.0
-    utter.volume = 1.0
-    if (window.speechSynthesis.speaking) {
-      window.speechSynthesis.cancel()
-    }
-    window.speechSynthesis.resume()
-    window.speechSynthesis.speak(utter)
-  } catch (e) {
-    console.warn('TTS failed', e)
-  }
-}
-
-async function startCamera() {
-  try {
-    cameraError.value = null
-    // Request back camera when available
-    mediaStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 1706 } },
-      audio: false,
-    })
-    if (videoEl.value) {
-      videoEl.value.srcObject = mediaStream
-      await videoEl.value.play()
-      cameraReady.value = true
-    }
-    // If we successfully obtained video, treat permission as granted
-    cameraPermission.value = 'granted'
-    // Try also to refresh from device labels (iOS Safari quirk)
-    refreshPermissionsFromDevices()
-  } catch (e: any) {
-    cameraError.value = e?.message || '無法開啟相機（需要 HTTPS 或權限）'
-    cameraReady.value = false
-    const name = e?.name || ''
-    if (name === 'NotAllowedError' || name === 'SecurityError') {
-      cameraPermission.value = 'denied'
-    }
-  }
-}
-
-function stopCamera() {
-  if (mediaStream) {
-    mediaStream.getTracks().forEach(t => t.stop())
-    mediaStream = null
-  }
-  cameraReady.value = false
 }
 
 async function takePhoto() {
-  if (!videoEl.value) return
   try {
-    const video = videoEl.value
-    const canvas = document.createElement('canvas')
-    const vw = video.videoWidth || 1080
-    const vh = video.videoHeight || 1440
-    canvas.width = vw
-    canvas.height = vh
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    ctx.drawImage(video, 0, 0, vw, vh)
-    const blob: Blob | null = await new Promise(resolve => canvas.toBlob(b => resolve(b), 'image/jpeg', 0.9))
-    if (!blob) return
+    const frame = await captureFrame()
+    if (!frame) return
     if (capturedImageUrl.value) URL.revokeObjectURL(capturedImageUrl.value)
-    const url = URL.createObjectURL(blob)
-    if (navigator.vibrate) navigator.vibrate(10)
-    capturedImageUrl.value = url
-    checkBackendHealth()
+    capturedImageUrl.value = frame.url
+    await checkBackendHealth()
   } catch (e) {
     console.error('takePhoto failed', e)
   }
@@ -306,37 +193,17 @@ function backToCapture() {
 
 // helper: take photo blob and send to backend /gemini/analyze with action
 async function takePhotoAndSend(action: string, text: string | null) {
-  if (!videoEl.value) return
   try {
-    const video = videoEl.value
-    const canvas = document.createElement('canvas')
-    const vw = video.videoWidth || 1080
-    const vh = video.videoHeight || 1440
-    canvas.width = vw
-    canvas.height = vh
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    ctx.drawImage(video, 0, 0, vw, vh)
-    const blob: Blob | null = await new Promise(resolve => canvas.toBlob(b => resolve(b), 'image/jpeg', 0.9))
-    if (!blob) return
+    const frame = await captureFrame()
+    if (!frame) return
 
     // update captured preview
     if (capturedImageUrl.value) URL.revokeObjectURL(capturedImageUrl.value)
-    const url = URL.createObjectURL(blob)
-    capturedImageUrl.value = url
-
-    // build form data
-  const apiUrl = resolveApiUrl('/gemini/analyze')
-    const fd = new FormData()
-    fd.append('action', action)
-    if (text) fd.append('text', text)
-    fd.append('image', new File([blob], 'photo.jpg', { type: 'image/jpeg' }))
+    capturedImageUrl.value = frame.url
 
     health.value = 'loading'
     try {
-      const res = await fetch(apiUrl, { method: 'POST', body: fd })
-      if (!res.ok) throw new Error(String(res.status))
-      const data = await res.json()
+      const data = await analyze(action, text, frame.blob)
       health.value = 'ok'
       console.log('analyze result', data)
       // announce result for accessibility
@@ -385,12 +252,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopCamera()
-  if (micPermissionWatcher && typeof micPermissionWatcher.onchange === 'function') {
-    micPermissionWatcher.onchange = null
-  }
-  if (cameraPermissionWatcher && typeof cameraPermissionWatcher.onchange === 'function') {
-    cameraPermissionWatcher.onchange = null
-  }
+  cleanupPermissionWatchers()
 })
 
 function toggleRecognition() {
@@ -431,50 +293,15 @@ function toggleRecognition() {
 
 async function checkBackendHealth() {
   health.value = 'loading'
-  const url = resolveApiUrl('/health')
   try {
-    const res = await fetch(url, { method: 'GET' })
-    if (!res.ok) throw new Error(String(res.status))
-    const data = await res.json()
-    health.value = data?.status === 'ok' ? 'ok' : 'error'
+    const status = await apiCheckHealth()
+    health.value = status === 'ok' ? 'ok' : 'error'
   } catch (e) {
     health.value = 'error'
   }
 }
 
-async function checkMicPermission() {
-  try {
-    if (!navigator.permissions || typeof navigator.permissions.query !== 'function') {
-      micPermission.value = 'unsupported'
-      return
-    }
-    const status = await navigator.permissions.query({ name: 'microphone' as PermissionName })
-    micPermission.value = status.state as PermissionState
-    micPermissionWatcher = status
-    status.onchange = () => {
-      micPermission.value = status.state as PermissionState
-    }
-  } catch {
-    micPermission.value = 'unsupported'
-  }
-}
-
-async function checkCameraPermission() {
-  try {
-    if (!navigator.permissions || typeof navigator.permissions.query !== 'function') {
-      cameraPermission.value = 'unsupported'
-      return
-    }
-    const status = await navigator.permissions.query({ name: 'camera' as PermissionName })
-    cameraPermission.value = status.state as PermissionState
-    cameraPermissionWatcher = status
-    status.onchange = () => {
-      cameraPermission.value = status.state as PermissionState
-    }
-  } catch {
-    cameraPermission.value = 'unsupported'
-  }
-}
+// checkMicPermission, checkCameraPermission provided by composable
 </script>
 
 <template>
@@ -572,7 +399,7 @@ async function checkCameraPermission() {
         v-if="!ttsReady"
         class="col-span-3 mt-2 h-12 rounded-lg bg-neutral-100 dark:bg-neutral-800 border border-neutral-200/70 dark:border-neutral-700 text-base active:scale-[0.98]"
         aria-label="啟用語音輸出"
-        @click="ensureTtsUnlocked"
+        @click="onTtsUnlockClick"
       >
         啟用語音輸出（若手機沒有說話請先點我）
       </button>
