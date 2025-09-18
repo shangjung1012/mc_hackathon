@@ -37,7 +37,7 @@ const cameraPermission = ref<PermissionState>('unsupported')
 let cameraPermissionWatcher: any | null = null
 
 // API base from Vite env, fallback to localhost
-const API_BASE = (import.meta.env.VITE_API_BASE || import.meta.env.VITE_BACKEND_URL || '') as string
+const API_BASE = (import.meta.env.VITE_BACKEND_URL || '') as string
 function resolveApiUrl(path: string) {
   if (API_BASE && API_BASE.trim()) {
     return API_BASE.replace(/\/$/, '') + path
