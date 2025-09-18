@@ -26,6 +26,9 @@ let currentWish = ''
 let wishDebounceTimer: ReturnType<typeof setTimeout> | null = null
 // TTS / live region for accessibility
 const liveMessage = ref<string>('')
+// TTS readiness and voice selection
+const ttsReady = ref(false)
+let selectedVoice: SpeechSynthesisVoice | null = null
 
 // Recognition restart/backoff state
 let restartAttempts = 0
@@ -189,15 +192,47 @@ if (recognitionSupported.value) {
   }
 }
 
+function pickZhVoice() {
+  try {
+    if (!('speechSynthesis' in window)) return
+    const voices = window.speechSynthesis.getVoices() || []
+    const preferred = voices.find(v => /^(zh(-|_)TW|cmn-Hant-TW)/i.test(v.lang)) || voices.find(v => /^zh/i.test(v.lang))
+    selectedVoice = preferred || null
+  } catch {}
+}
+
+function ensureTtsUnlocked() {
+  try {
+    if (!('speechSynthesis' in window)) return
+    const unlock = new SpeechSynthesisUtterance(' ')
+    unlock.volume = 0
+    unlock.rate = 1
+    if (selectedVoice) unlock.voice = selectedVoice
+    window.speechSynthesis.cancel()
+    window.speechSynthesis.resume()
+    window.speechSynthesis.speak(unlock)
+    ttsReady.value = true
+    liveMessage.value = '語音已啟用'
+  } catch {}
+}
+
 function speakText(text: string) {
   try {
     if (!('speechSynthesis' in window)) return
+    if (!ttsReady.value) {
+      ensureTtsUnlocked()
+      if (!ttsReady.value) return
+    }
     const utter = new SpeechSynthesisUtterance(text)
     utter.lang = 'zh-TW'
+    if (selectedVoice) utter.voice = selectedVoice
     // Optional: adjust rate/volume if needed for clarity
     utter.rate = 1.0
     utter.volume = 1.0
-    window.speechSynthesis.cancel()
+    if (window.speechSynthesis.speaking) {
+      window.speechSynthesis.cancel()
+    }
+    window.speechSynthesis.resume()
     window.speechSynthesis.speak(utter)
   } catch (e) {
     console.warn('TTS failed', e)
@@ -321,6 +356,13 @@ async function takePhotoAndSend(action: string, text: string | null) {
 }
 
 onMounted(() => {
+  // Prepare TTS voices
+  if ('speechSynthesis' in window) {
+    try {
+      pickZhVoice()
+      window.speechSynthesis.onvoiceschanged = () => pickZhVoice()
+    } catch {}
+  }
   // Auto-start continuous speech recognition loop
   if (recognitionSupported.value) {
     shouldKeepRecognizing = true
@@ -523,6 +565,16 @@ async function checkCameraPermission() {
           <span v-if="recognizing">停&nbsp;止</span>
           <span v-else>開始偵測</span>
         </span>
+      </button>
+
+      <!-- One-time TTS unlock for mobile browsers -->
+      <button
+        v-if="!ttsReady"
+        class="col-span-3 mt-2 h-12 rounded-lg bg-neutral-100 dark:bg-neutral-800 border border-neutral-200/70 dark:border-neutral-700 text-base active:scale-[0.98]"
+        aria-label="啟用語音輸出"
+        @click="ensureTtsUnlocked"
+      >
+        啟用語音輸出（若手機沒有說話請先點我）
       </button>
 
       <!-- Live region for screen readers (visually hidden) -->
