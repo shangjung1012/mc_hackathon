@@ -29,6 +29,127 @@ const liveMessage = ref<string>('')
 // TTS composable
 const { ttsReady, pickZhVoice, ensureTtsUnlocked, speakText } = useTTS()
 
+// Countdown state for photo (null = no countdown)
+const countdown = ref<number | null>(null)
+
+// Hold music (Web Audio) state
+let audioCtx: AudioContext | null = null
+let holdGain: GainNode | null = null
+let holdOsc: OscillatorNode | null = null
+let holdInterval: number | null = null
+// HTMLAudio fallback/source
+let holdAudioEl: HTMLAudioElement | null = null
+const HOLD_MUSIC_URL = (import.meta.env.VITE_HOLD_MUSIC_URL as string) || '/hold_music.mp3'
+
+async function startHoldMusic() {
+  try {
+    // If an audio file exists (public/hold_music.mp3 or VITE_HOLD_MUSIC_URL), try to play it first
+    try {
+      // create or reuse audio element
+      if (!holdAudioEl) {
+        holdAudioEl = new Audio(HOLD_MUSIC_URL)
+        holdAudioEl.loop = true
+        holdAudioEl.preload = 'auto'
+        holdAudioEl.crossOrigin = 'anonymous'
+      }
+
+      // Try to play; browsers require user gesture. If play succeeds, skip WebAudio oscillator.
+      const playPromise = holdAudioEl.play()
+      if (playPromise && typeof playPromise.then === 'function') {
+        await playPromise
+        return
+      }
+    } catch (e) {
+      // fall through to WebAudio oscillator if audio element playback fails
+    }
+    if (!('AudioContext' in window || 'webkitAudioContext' in window)) return
+    if (!audioCtx) {
+      // @ts-ignore
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)()
+    }
+    // resume context (user gesture may be required)
+    try { await audioCtx.resume() } catch {}
+
+    stopHoldMusic()
+
+    holdGain = audioCtx.createGain()
+    holdGain.gain.value = 0.0
+    holdGain.connect(audioCtx.destination)
+
+    holdOsc = audioCtx.createOscillator()
+    holdOsc.type = 'sine'
+    holdOsc.frequency.value = 440
+    holdOsc.connect(holdGain)
+    holdOsc.start()
+
+    // fade in quickly
+    holdGain.gain.cancelScheduledValues(audioCtx.currentTime)
+    holdGain.gain.setValueAtTime(0.0, audioCtx.currentTime)
+    holdGain.gain.linearRampToValueAtTime(0.06, audioCtx.currentTime + 0.2)
+
+    // pattern: alternate between two frequencies to simulate hold music
+    let step = 0
+    holdInterval = window.setInterval(() => {
+      if (!holdOsc) return
+      step = (step + 1) % 4
+      const freq = [440, 660, 550, 770][step]
+      try { holdOsc.frequency.setValueAtTime(freq, audioCtx!.currentTime) } catch {}
+    }, 600)
+  } catch (e) {
+    console.warn('startHoldMusic failed', e)
+  }
+}
+
+function stopHoldMusic() {
+  try {
+    // stop HTMLAudio if playing
+    try {
+      if (holdAudioEl) {
+        try { holdAudioEl.pause() } catch {}
+        try { holdAudioEl.currentTime = 0 } catch {}
+      }
+    } catch {}
+    if (holdInterval) { clearInterval(holdInterval); holdInterval = null }
+    if (holdGain && audioCtx) {
+      holdGain.gain.cancelScheduledValues(audioCtx.currentTime)
+      holdGain.gain.linearRampToValueAtTime(0.0, audioCtx.currentTime + 0.15)
+    }
+    if (holdOsc) {
+      try { holdOsc.stop(audioCtx ? audioCtx.currentTime + 0.16 : 0) } catch {}
+      holdOsc.disconnect()
+      holdOsc = null
+    }
+    if (holdGain) { holdGain.disconnect(); holdGain = null }
+  } catch (e) {
+    console.warn('stopHoldMusic failed', e)
+  }
+}
+
+function startCountdown(seconds = 3) {
+  return new Promise<void>((resolve) => {
+    countdown.value = seconds
+    // speak first number immediately
+    try { speakText(String(countdown.value)) } catch {}
+    const iv = setInterval(() => {
+      if (countdown.value === null) {
+        clearInterval(iv)
+        resolve()
+        return
+      }
+      countdown.value = (countdown.value || 0) - 1
+      if (countdown.value! > 0) {
+        try { speakText(String(countdown.value)) } catch {}
+      }
+      if (countdown.value! <= 0) {
+        clearInterval(iv)
+        try { speakText('拍照') } catch {}
+        // small delay to let '拍照' start
+        setTimeout(() => { countdown.value = null; resolve() }, 250)
+      }
+    }, 1000)
+  })
+}
+
 // Recognition restart/backoff state
 let restartAttempts = 0
 const maxRestartAttempts = 6
@@ -175,6 +296,8 @@ function onTtsUnlockClick() {
 
 async function takePhoto() {
   try {
+    // countdown before capture
+    await startCountdown(3)
     const frame = await captureFrame()
     if (!frame) return
     if (capturedImageUrl.value) URL.revokeObjectURL(capturedImageUrl.value)
@@ -194,6 +317,8 @@ function backToCapture() {
 // helper: take photo blob and send to backend /gemini/analyze with action
 async function takePhotoAndSend(action: string, text: string | null) {
   try {
+    // countdown before capture/analysis
+    await startCountdown(3)
     const frame = await captureFrame()
     if (!frame) return
 
@@ -203,19 +328,29 @@ async function takePhotoAndSend(action: string, text: string | null) {
 
     health.value = 'loading'
     try {
-      const data = await analyze(action, text, frame.blob)
-      health.value = 'ok'
-      console.log('analyze result', data)
-      // announce result for accessibility
-      const spoken = typeof data?.result === 'string' ? data.result : JSON.stringify(data.result)
-      liveMessage.value = spoken
-      speakText(spoken)
+        // announce sending and start hold music
+        const sendingMsg = '已傳送，等待回應中'
+        liveMessage.value = sendingMsg
+        speakText(sendingMsg)
+        // start hold music (may require prior user gesture to unlock AudioContext)
+        await startHoldMusic()
+
+        const data = await analyze(action, text, frame.blob)
+        health.value = 'ok'
+        console.log('analyze result', data)
+        // stop hold music and announce result for accessibility
+        stopHoldMusic()
+        const spoken = typeof data?.result === 'string' ? data.result : JSON.stringify(data.result)
+        liveMessage.value = spoken
+        speakText(spoken)
     } catch (e) {
       console.error('analyze failed', e)
       health.value = 'error'
-      const errMsg = '伺服器回應失敗'
-      liveMessage.value = errMsg
-      speakText(errMsg)
+        // stop hold music and announce error
+        stopHoldMusic()
+        const errMsg = '伺服器回應失敗'
+        liveMessage.value = errMsg
+        speakText(errMsg)
     }
   } catch (e) {
     console.error('takePhotoAndSend failed', e)
@@ -309,6 +444,12 @@ async function checkBackendHealth() {
     <!-- Live region for screen readers: announce API/TTS results -->
     <div class="sr-only" aria-live="polite">{{ liveMessage }}</div>
     <section class="p-4 pb-2 flex items-center justify-center">
+      <!-- Countdown overlay -->
+      <div v-if="countdown !== null" class="fixed inset-0 z-50 grid place-items-center pointer-events-none">
+        <div class="bg-black/70 text-white text-6xl font-bold rounded-xl px-8 py-6">
+          {{ countdown }}
+        </div>
+      </div>
       <div class="w-full max-w-sm">
         <!-- Speech transcript area -->
         <div class="mb-4">
