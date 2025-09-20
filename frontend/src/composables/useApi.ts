@@ -23,14 +23,14 @@ export function useApi() {
     }
   }
   async function synthesizeTTS(text: string, language_code = 'cmn-CN', voice_name = 'cmn-CN-Standard-A') {
-  const apiUrl = resolveApiUrl('/tts/synthesize')
-  const res = await fetch(apiUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, language_code, voice_name })
-  })
-  if (!res.ok) throw new Error(String(res.status))
-  return res.json()
+    const apiUrl = resolveApiUrl('/tts/synthesize')
+    const res = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, language_code, voice_name })
+    })
+    if (!res.ok) throw new Error(String(res.status))
+    return res.json()
 }
 
   async function analyze(action: string, text: string | null, blob: Blob): Promise<any> {
