@@ -40,7 +40,7 @@ async def analyze(
     model: str = Form(default="gemini-2.5-flash-lite"),
 ):
     """Accepts an image or webpage URL with optional text, then calls Gemini."""
-    logger.info("Gemini analysis request", 
+    logger.debug("Gemini analysis request", 
                 has_image=image is not None, 
                 has_text=text is not None, 
                 model=model)
@@ -58,11 +58,11 @@ async def analyze(
         if image:
             data, mime = _read_upload_bytes(image)
             contents.append(types.Part.from_bytes(data=data, mime_type=mime))
-            logger.info("Image processed for analysis", mime_type=mime, data_size=len(data))
+            logger.debug("Image processed for analysis", mime_type=mime, data_size=len(data))
 
         if text:
             contents.append(text)
-            logger.info("Text added for analysis", text_length=len(text))
+            logger.debug("Text added for analysis", text_length=len(text))
 
         # 根據模型類型設置配置
         config_params = {
@@ -77,7 +77,7 @@ async def analyze(
         
         config = types.GenerateContentConfig(**config_params)
 
-        logger.info("Sending request to Gemini API", model=model)
+        logger.debug("Sending request to Gemini API", model=model)
         resp = client.models.generate_content(
             model=model,
             contents=contents,
@@ -94,7 +94,7 @@ async def analyze(
                     speech = parsed.get("speech")
                 
                 if speech:
-                    logger.info("Gemini analysis completed successfully", 
+                    logger.debug("Gemini analysis completed successfully", 
                                speech_length=len(speech))
                     return {"result": speech}
                 else:
@@ -104,7 +104,7 @@ async def analyze(
                 pass
         # Fallback to raw text string
         result = getattr(resp, "text", str(resp))
-        logger.info("Gemini analysis completed with fallback", result_length=len(result))
+        logger.debug("Gemini analysis completed with fallback", result_length=len(result))
         return {"result": result}
     except Exception as exc:
         logger.error("Gemini analysis failed", error=str(exc), exc_info=True)
@@ -123,7 +123,7 @@ async def analyze_and_speak(
     Analyze image/text with Gemini and return audio response.
     Combines Gemini analysis with TTS synthesis.
     """
-    logger.info("Gemini analyze-and-speak request", 
+    logger.debug("Gemini analyze-and-speak request", 
                 has_image=image is not None, 
                 has_text=text is not None, 
                 model=model,
@@ -138,7 +138,7 @@ async def analyze_and_speak(
         if not speech_text:
             raise HTTPException(status_code=500, detail="No speech content generated")
 
-        logger.info("Gemini analysis completed", speech_length=len(speech_text))
+        logger.debug("Gemini analysis completed", speech_length=len(speech_text))
 
         # 使用 TTS 合成語音
         try:
@@ -148,7 +148,7 @@ async def analyze_and_speak(
                 voice_name=voice_name
             )
             
-            logger.info("TTS synthesis completed successfully", audio_size=len(audio_data))
+            logger.debug("TTS synthesis completed successfully", audio_size=len(audio_data))
             
             # 返回音頻流
             return StreamingResponse(

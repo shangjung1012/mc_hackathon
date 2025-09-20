@@ -140,7 +140,7 @@ async def synthesize_text_to_speech(request: TTSRequest):
     Returns:
         Response containing success status and audio URL
     """
-    logger.info("TTS synthesis request", 
+    logger.debug("TTS synthesis request", 
                 text_length=len(request.text), 
                 language_code=request.language_code, 
                 voice_name=request.voice_name)
@@ -156,7 +156,7 @@ async def synthesize_text_to_speech(request: TTSRequest):
         # Encode audio data as base64
         audio_base64 = base64.b64encode(audio_data).decode('utf-8')
         
-        logger.info("TTS synthesis completed successfully", audio_size=len(audio_data))
+        logger.debug("TTS synthesis completed successfully", audio_size=len(audio_data))
         
         return TTSResponse(
             success=True,
@@ -183,7 +183,7 @@ async def synthesize_text_to_speech_stream(request: TTSRequest):
     Returns:
         Audio stream data
     """
-    logger.info("TTS stream synthesis request", 
+    logger.debug("TTS stream synthesis request", 
                 text_length=len(request.text), 
                 language_code=request.language_code, 
                 voice_name=request.voice_name)
@@ -199,7 +199,7 @@ async def synthesize_text_to_speech_stream(request: TTSRequest):
         # Create audio stream
         audio_stream = io.BytesIO(audio_data)
         
-        logger.info("TTS stream synthesis completed successfully", audio_size=len(audio_data))
+        logger.debug("TTS stream synthesis completed successfully", audio_size=len(audio_data))
         
         return StreamingResponse(
             io.BytesIO(audio_data),
