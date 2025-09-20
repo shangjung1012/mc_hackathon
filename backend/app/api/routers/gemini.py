@@ -64,13 +64,18 @@ async def analyze(
             contents.append(text)
             logger.info("Text added for analysis", text_length=len(text))
 
-
-        config = types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            thinking_config=types.ThinkingConfig(thinking_budget=-1),
-            response_mime_type="application/json",
-            response_schema=SpeechResponse,
-        )
+        # 根據模型類型設置配置
+        config_params = {
+            "system_instruction": SYSTEM_PROMPT,
+            "response_mime_type": "application/json",
+            "response_schema": SpeechResponse,
+        }
+        
+        # 只有支援 thinking 的模型才添加 thinking_config
+        if "2.5" in model or "1.5" in model:
+            config_params["thinking_config"] = types.ThinkingConfig(thinking_budget=-1)
+        
+        config = types.GenerateContentConfig(**config_params)
 
         logger.info("Sending request to Gemini API", model=model)
         resp = client.models.generate_content(
@@ -125,61 +130,17 @@ async def analyze_and_speak(
                 language_code=language_code,
                 voice_name=voice_name)
     
-    # Require at least one of image or text
-    if not image and not text:
-        logger.warning("Gemini analyze-and-speak failed: no input provided")
-        raise HTTPException(status_code=400, detail="Provide at least one of image or text")
-
     try:
-        # First, get text analysis from Gemini
-        client = _client()
-
-        contents: list[object] = []
-
-        if image:
-            data, mime = _read_upload_bytes(image)
-            contents.append(types.Part.from_bytes(data=data, mime_type=mime))
-            logger.info("Image processed for analysis", mime_type=mime, data_size=len(data))
-
-        if text:
-            contents.append(text)
-            logger.info("Text added for analysis", text_length=len(text))
-
-        config = types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            thinking_config=types.ThinkingConfig(thinking_budget=-1),
-            response_mime_type="application/json",
-            response_schema=SpeechResponse,
-        )
-
-        logger.info("Sending request to Gemini API", model=model)
-        resp = client.models.generate_content(
-            model=model,
-            contents=contents,
-            config=config,
-        )
-
-        # Extract speech text from Gemini response
-        speech_text = None
-        if getattr(resp, "parsed", None) is not None:
-            try:
-                parsed = resp.parsed
-                speech_text = getattr(parsed, "speech", None)
-                if speech_text is None and isinstance(parsed, dict):
-                    speech_text = parsed.get("speech")
-            except Exception as e:
-                logger.warning("Failed to parse Gemini response", error=str(e))
-        
-        # Fallback to raw text if parsing failed
-        if not speech_text:
-            speech_text = getattr(resp, "text", str(resp))
+        # 直接調用 analyze 函數獲取文本結果
+        analysis_result = await analyze(image, text, model)
+        speech_text = analysis_result["result"]
         
         if not speech_text:
             raise HTTPException(status_code=500, detail="No speech content generated")
 
         logger.info("Gemini analysis completed", speech_length=len(speech_text))
 
-        # Now synthesize speech using TTS
+        # 使用 TTS 合成語音
         try:
             audio_data = synthesize_speech(
                 text=speech_text,
@@ -189,7 +150,7 @@ async def analyze_and_speak(
             
             logger.info("TTS synthesis completed successfully", audio_size=len(audio_data))
             
-            # Return audio as streaming response
+            # 返回音頻流
             return StreamingResponse(
                 io.BytesIO(audio_data),
                 media_type="audio/wav",
@@ -202,6 +163,9 @@ async def analyze_and_speak(
             logger.error("TTS synthesis failed", error=str(tts_error), exc_info=True)
             raise HTTPException(status_code=500, detail=f"TTS synthesis failed: {tts_error}")
 
+    except HTTPException:
+        # 重新拋出 HTTP 異常
+        raise
     except Exception as exc:
         logger.error("Gemini analyze-and-speak failed", error=str(exc), exc_info=True)
         raise HTTPException(status_code=500, detail=f"Request failed: {exc}")
