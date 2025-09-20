@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from jose import JWTError, jwt
 from ...core.database import get_db
 from ...core.logging import get_logger
@@ -18,9 +18,9 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     """創建 JWT token"""
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.now(datetime.timezone.utc) + expires_delta
+        expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.now(datetime.timezone.utc) + timedelta(minutes=15)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
     return encoded_jwt
@@ -56,7 +56,17 @@ def register_user(username: str, db: Session = Depends(get_db)):
         return {
             "success": True,
             "message": "User registered successfully",
-            "user": new_user,
+            "user": {
+                "id": new_user.id,
+                "username": new_user.username,
+                "gender": new_user.gender.value if new_user.gender else None,
+                "age": new_user.age,
+                "vision_level": new_user.vision_level.value if new_user.vision_level else None,
+                "chronic_diseases": new_user.chronic_diseases,
+                "others": new_user.others,
+                "created_at": new_user.created_at.isoformat(),
+                "updated_at": new_user.updated_at.isoformat() if new_user.updated_at else None
+            },
             "token": access_token
         }
     except Exception as e:
@@ -90,7 +100,17 @@ def login_user(username: str, db: Session = Depends(get_db)):
         return {
             "success": True,
             "message": "User logged in successfully",
-            "user": user,
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "gender": user.gender.value if user.gender else None,
+                "age": user.age,
+                "vision_level": user.vision_level.value if user.vision_level else None,
+                "chronic_diseases": user.chronic_diseases,
+                "others": user.others,
+                "created_at": user.created_at.isoformat(),
+                "updated_at": user.updated_at.isoformat() if user.updated_at else None
+            },
             "token": access_token
         }
     except Exception as e:

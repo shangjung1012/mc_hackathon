@@ -3,8 +3,28 @@
  * 集中處理所有後端 API 調用
  */
 
-// API 基礎配置
-const API_BASE = (import.meta as any).env?.VITE_API_BASE || ''
+// API 基礎配置 - 根據前端協議動態調整後端協議
+const getApiBase = () => {
+  const backendUrl = (import.meta as any).env?.VITE_BACKEND_URL || 'http://localhost:8000'
+  const cleanUrl = backendUrl.replace(/\/+$/, '')
+  
+  // 檢測前端是否使用 HTTPS
+  const isHttps = window.location.protocol === 'https:'
+  
+  // 如果前端是 HTTPS 但後端是 HTTP，則調整後端為 HTTPS
+  if (isHttps && cleanUrl.startsWith('http://')) {
+    return cleanUrl.replace('http://', 'https://')
+  }
+  
+  // 如果前端是 HTTP 但後端是 HTTPS，則調整後端為 HTTP
+  if (!isHttps && cleanUrl.startsWith('https://')) {
+    return cleanUrl.replace('https://', 'http://')
+  }
+  
+  return cleanUrl
+}
+
+const API_BASE = getApiBase()
 
 // 通用 API 響應類型
 export interface ApiResponse<T = any> {
@@ -58,7 +78,8 @@ export class ApiService {
         },
         ...options,
       })
-
+      console.log('url', url)
+      console.log('response', response)
       const contentType = response.headers.get('content-type') || ''
       
       // 處理音訊響應
@@ -116,7 +137,7 @@ export class ApiService {
    */
   async register(username: string): Promise<AuthResponse> {
     const response = await this.request<AuthResponse>(
-      `/api/users/register?username=${encodeURIComponent(username)}`,
+      `/users/register?username=${encodeURIComponent(username)}`,
       {
         method: 'POST',
       }
@@ -141,7 +162,7 @@ export class ApiService {
    */
   async login(username: string): Promise<AuthResponse> {
     const response = await this.request<AuthResponse>(
-      `/api/users/login?username=${encodeURIComponent(username)}`,
+      `/users/login?username=${encodeURIComponent(username)}`,
       {
         method: 'POST',
       }
@@ -206,14 +227,14 @@ export class ApiService {
    * 檢查健康狀態
    */
   async checkHealth(): Promise<ApiResponse<any>> {
-    return this.request('/api/health')
+    return this.request('/health')
   }
 
   /**
    * 獲取系統提示
    */
   async getSystemPrompt(): Promise<ApiResponse<string>> {
-    return this.request('/api/system-prompt')
+    return this.request('/system-prompt')
   }
 
   /**
@@ -221,7 +242,7 @@ export class ApiService {
    */
   async textToSpeech(text: string): Promise<ApiResponse<Response>> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/tts/speak`, {
+      const response = await fetch(`${this.baseUrl}/tts/speak`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
