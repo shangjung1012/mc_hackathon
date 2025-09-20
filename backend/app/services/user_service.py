@@ -2,7 +2,6 @@ from sqlalchemy.orm import Session
 from typing import Optional, List
 from ..models.user import User
 from ..schemas.user import UserCreate, UserUpdate
-from ..core.security import get_password_hash, verify_password
 from ..core.logging import get_logger
 
 logger = get_logger("services.user")
@@ -43,11 +42,8 @@ class UserService:
         """創建新使用者"""
         logger.info("Creating new user", username=user.username)
         try:
-            hashed_password = get_password_hash(user.password)
             db_user = User(
-                username=user.username,
-                hashed_password=hashed_password,
-                is_active=user.is_active
+                username=user.username
             )
             self.db.add(db_user)
             self.db.commit()
@@ -69,11 +65,6 @@ class UserService:
 
         try:
             update_data = user_update.dict(exclude_unset=True)
-            
-            # 如果更新密碼，需要重新雜湊
-            if "password" in update_data:
-                update_data["hashed_password"] = get_password_hash(update_data.pop("password"))
-                logger.debug("Password updated for user", user_id=user_id)
 
             for field, value in update_data.items():
                 setattr(db_user, field, value)
@@ -107,15 +98,3 @@ class UserService:
             self.db.rollback()
             raise
 
-    def authenticate_user(self, username: str, password: str) -> Optional[User]:
-        """驗證使用者登入"""
-        logger.debug("Authenticating user", username=username)
-        user = self.get_user_by_username(username)
-        if not user:
-            logger.warning("Authentication failed: user not found", username=username)
-            return None
-        if not verify_password(password, user.hashed_password):
-            logger.warning("Authentication failed: invalid password", username=username)
-            return None
-        logger.info("User authenticated successfully", user_id=user.id, username=username)
-        return user

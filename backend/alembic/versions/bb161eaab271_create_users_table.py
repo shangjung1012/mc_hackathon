@@ -1,8 +1,8 @@
-"""Create users table with proper import
+"""Create users table
 
-Revision ID: 3a2b50d54923
-Revises: 10e5fb446bf6
-Create Date: 2025-09-20 13:36:58.203824
+Revision ID: bb161eaab271
+Revises: be18ca37f291
+Create Date: 2025-09-20 20:40:52.794517
 
 """
 from typing import Sequence, Union
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '3a2b50d54923'
-down_revision: Union[str, Sequence[str], None] = '10e5fb446bf6'
+revision: str = 'bb161eaab271'
+down_revision: Union[str, Sequence[str], None] = 'be18ca37f291'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -24,9 +24,10 @@ def upgrade() -> None:
     op.create_table('users',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('username', sa.String(length=50), nullable=False),
-    sa.Column('hashed_password', sa.String(length=255), nullable=False),
-    sa.Column('is_active', sa.Boolean(), nullable=True),
-    sa.Column('is_superuser', sa.Boolean(), nullable=True),
+    sa.Column('gender', sa.Enum('MALE', 'FEMALE', 'OTHER', name='genderenum'), nullable=True),
+    sa.Column('age', sa.Integer(), nullable=True),
+    sa.Column('vision_level', sa.Enum('LEVEL_0', 'LEVEL_1', 'LEVEL_2', 'LEVEL_3', 'LEVEL_4', 'LEVEL_5', name='visionlevelenum'), nullable=True),
+    sa.Column('chronic_diseases', sa.ARRAY(sa.String()), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
     sa.PrimaryKeyConstraint('id')
