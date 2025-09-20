@@ -194,8 +194,7 @@ async def analyze_and_speak(
                 io.BytesIO(audio_data),
                 media_type="audio/wav",
                 headers={
-                    "Content-Disposition": "attachment; filename=response.wav",
-                    "X-Speech-Text": speech_text  # Include the text in headers for debugging
+                    "Content-Disposition": "attachment; filename=response.wav"
                 }
             )
             
