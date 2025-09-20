@@ -139,9 +139,20 @@ export class SpeechToTextService {
     }
 
     try {
+      // 如果之前有錯誤，重新初始化
+      if (this.recognition.error) {
+        this.initializeRecognition()
+      }
       this.recognition.start()
     } catch (error) {
-      this.callbacks.onError?.('無法開始語音識別')
+      console.error('語音識別啟動錯誤:', error)
+      // 嘗試重新初始化
+      try {
+        this.initializeRecognition()
+        this.recognition.start()
+      } catch (retryError) {
+        this.callbacks.onError?.('無法開始語音識別')
+      }
     }
   }
 
@@ -216,6 +227,16 @@ export class SpeechToTextService {
       'pt-BR', // 葡萄牙語
       'ru-RU'  // 俄語
     ]
+  }
+
+  /**
+   * 重新初始化語音識別
+   */
+  public reinitialize(): void {
+    if (this.recognition) {
+      this.abortListening()
+    }
+    this.initializeRecognition()
   }
 
   /**

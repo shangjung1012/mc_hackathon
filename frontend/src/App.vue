@@ -20,8 +20,8 @@
       </button>
       
       <!-- 狀態文字 -->
-      <p class="mt-6 text-lg font-medium text-gray-700 dark:text-gray-300">
-        {{ isRecording ? '錄音中... 點擊停止' : '點擊開始錄音' }}
+      <p v-if="isRecording" class="mt-6 text-lg font-medium text-gray-700 dark:text-gray-300">
+        錄音中... 點擊停止
       </p>
       
       <!-- 錄音時間顯示 -->
@@ -35,33 +35,13 @@
           <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
           <span class="text-sm">語音識別中...</span>
         </div>
-        <p v-else-if="!isRecording" class="text-sm text-gray-500 dark:text-gray-400">
-          錄音時會自動轉換為文字
-        </p>
       </div>
 
       <!-- 語音轉文字結果 -->
-      <div v-if="transcriptText" class="mt-6 p-4 bg-white dark:bg-gray-800 rounded-lg shadow-md">
-        <h3 class="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-3">語音轉文字結果</h3>
-        <div class="text-left">
-          <p class="text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap">{{ transcriptText }}</p>
-          <div v-if="isListening && interimText" class="mt-2 text-sm text-gray-500 dark:text-gray-400 italic">
-            即時識別: {{ interimText }}
-          </div>
-        </div>
-        <div class="mt-4 flex justify-center space-x-2">
-          <button 
-            @click="copyTranscript"
-            class="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors text-sm"
-          >
-            複製文字
-          </button>
-          <button 
-            @click="clearTranscript"
-            class="px-4 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600 transition-colors text-sm"
-          >
-            清除
-          </button>
+      <div v-if="transcriptText" class="mt-6 text-center">
+        <p class="text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap">{{ transcriptText }}</p>
+        <div v-if="isListening && interimText" class="mt-2 text-sm text-gray-500 dark:text-gray-400 italic">
+          即時識別: {{ interimText }}
         </div>
       </div>
       
@@ -154,7 +134,17 @@ const startRecording = async () => {
     
     // 開始語音識別
     if (speechRecognitionSupported.value) {
-      speechToText.startListening()
+      // 確保語音識別實例正確初始化
+      try {
+        speechToText.startListening()
+      } catch (error) {
+        console.warn('語音識別啟動失敗，嘗試重新初始化:', error)
+        // 如果啟動失敗，重新初始化並重試
+        speechToText.reinitialize()
+        setTimeout(() => {
+          speechToText.startListening()
+        }, 100)
+      }
     }
     
     // 開始計時
@@ -196,29 +186,6 @@ const toggleRecording = () => {
 }
 
 
-// 複製轉錄文字
-const copyTranscript = async () => {
-  try {
-    await navigator.clipboard.writeText(transcriptText.value)
-    // 可以在這裡添加成功提示
-    console.log('文字已複製到剪貼板')
-  } catch (err) {
-    console.error('複製失敗:', err)
-    // 降級方案
-    const textArea = document.createElement('textarea')
-    textArea.value = transcriptText.value
-    document.body.appendChild(textArea)
-    textArea.select()
-    document.execCommand('copy')
-    document.body.removeChild(textArea)
-  }
-}
-
-// 清除轉錄文字
-const clearTranscript = () => {
-  transcriptText.value = ''
-  interimText.value = ''
-}
 
 // 初始化
 initializeSpeechToText()
