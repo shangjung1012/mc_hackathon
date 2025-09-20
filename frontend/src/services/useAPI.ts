@@ -63,6 +63,19 @@ export class ApiService {
   }
 
   /**
+   * 獲取認證標頭
+   */
+  private getAuthHeaders(): Record<string, string> {
+    const token = localStorage.getItem('auth_token')
+    if (token) {
+      return {
+        'Authorization': `Bearer ${token}`
+      }
+    }
+    return {}
+  }
+
+  /**
    * 通用 fetch 包裝器
    */
   private async request<T>(
@@ -74,6 +87,7 @@ export class ApiService {
       const response = await fetch(url, {
         headers: {
           'Content-Type': 'application/json',
+          ...this.getAuthHeaders(),
           ...options.headers,
         },
         ...options,
@@ -238,6 +252,13 @@ export class ApiService {
   }
 
   /**
+   * 獲取當前用戶信息
+   */
+  async getCurrentUser(): Promise<ApiResponse<User>> {
+    return this.request<User>('/users/me')
+  }
+
+  /**
    * 文字轉語音
    */
   async textToSpeech(text: string): Promise<ApiResponse<Response>> {
@@ -246,6 +267,7 @@ export class ApiService {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...this.getAuthHeaders(),
         },
         body: JSON.stringify({ text }),
       })

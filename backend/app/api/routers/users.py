@@ -6,6 +6,7 @@ from jose import JWTError, jwt
 from ...core.database import get_db
 from ...core.logging import get_logger
 from ...core.config import settings
+from ...core.auth import get_current_user, get_current_user_optional
 from ...schemas.user import User, UserCreate, UserUpdate, Token
 from ...services.user_service import UserService
 
@@ -140,6 +141,27 @@ def create_user(user: UserCreate, db: Session = Depends(get_db)):
     except Exception as e:
         logger.error("User creation failed", username=user.username, error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/me", response_model=dict)
+def get_current_user_info(current_user = Depends(get_current_user)):
+    """獲取當前登入用戶的詳細信息"""
+    logger.debug("Current user info requested", user_id=current_user.id, username=current_user.username)
+    
+    return {
+        "success": True,
+        "user": {
+            "id": current_user.id,
+            "username": current_user.username,
+            "gender": current_user.gender.value if current_user.gender else None,
+            "age": current_user.age,
+            "vision_level": current_user.vision_level.value if current_user.vision_level else None,
+            "chronic_diseases": current_user.chronic_diseases,
+            "others": current_user.others,
+            "created_at": current_user.created_at.isoformat(),
+            "updated_at": current_user.updated_at.isoformat() if current_user.updated_at else None
+        }
+    }
 
 
 @router.get("/", response_model=List[User])

@@ -38,14 +38,32 @@ export class AuthService {
   }
 
   /**
-   * 獲取當前用戶
+   * 獲取當前用戶（從 API 獲取最新信息）
    */
-  public getCurrentUser(): User | null {
+  public async getCurrentUser(): Promise<User | null> {
     const token = localStorage.getItem('auth_token')
     if (!token) return null
 
     try {
-      // 簡單的 token 解析（實際應用中應該驗證 token 的有效性）
+      const response = await this.api.getCurrentUser()
+      if (response.success && response.data) {
+        this.saveUser(response.data)
+        return response.data
+      }
+      return null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * 獲取本地存儲的用戶信息（同步方法）
+   */
+  public getCachedUser(): User | null {
+    const token = localStorage.getItem('auth_token')
+    if (!token) return null
+
+    try {
       const userData = localStorage.getItem('current_user')
       return userData ? JSON.parse(userData) : null
     } catch {
