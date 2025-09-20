@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 
 def create_app() -> FastAPI:
-    load_dotenv()
+    load_dotenv(override=True)
     application = FastAPI(title=settings.app_name, version=settings.version)
 
     application.add_middleware(

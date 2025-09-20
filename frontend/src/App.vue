@@ -2,6 +2,7 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useApi } from './composables/useApi'
 import { useTTS } from './composables/useTTS'
+import { apiTTS } from './composables/apiTTS'
 import { usePermissions } from './composables/usePermissions'
 import { useCamera } from './composables/useCamera'
 
@@ -28,6 +29,7 @@ let wishDebounceTimer: ReturnType<typeof setTimeout> | null = null
 const liveMessage = ref<string>('')
 // TTS composable
 const { ttsReady, pickZhVoice, ensureTtsUnlocked, speakText } = useTTS()
+const { audioUrl, audioRef, playAudioFromBackend } = apiTTS()
 
 // Countdown state for photo (null = no countdown)
 const countdown = ref<number | null>(null)
@@ -157,6 +159,7 @@ const { micPermission, cameraPermission, refreshPermissionsFromDevices, checkMic
 
 // API helpers
 const { checkBackendHealth: apiCheckHealth, analyze } = useApi()
+const { synthesizeTTS } = useApi()
 
 if (recognitionSupported.value) {
   const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
@@ -342,8 +345,18 @@ async function takePhotoAndSend(action: string, text: string | null) {
         stopHoldMusic()
         const spoken = typeof data?.result === 'string' ? data.result : JSON.stringify(data.result)
         liveMessage.value = spoken
-        speakText(spoken)
-    } catch (e) {
+        try {
+          const ttsData = await synthesizeTTS(spoken)
+          if (ttsData.audio_url) {
+            playAudioFromBackend(ttsData.audio_url)
+          } else {
+            speakText(spoken)
+          }
+        } catch (e) {
+          speakText(spoken)
+        }
+      
+} catch (e) {
       console.error('analyze failed', e)
       health.value = 'error'
         // stop hold music and announce error
@@ -569,6 +582,7 @@ async function checkBackendHealth() {
         拍照
       </button>
     </nav>
+    <audio ref="audioRef" :src="audioUrl" style="display:none" />
   </main>
   
 </template>
