@@ -9,18 +9,16 @@ class UserBase(BaseModel):
 
 
 class UserCreate(UserBase):
-    password: str
+    pass
 
 
 class UserUpdate(BaseModel):
     username: Optional[str] = None
     is_active: Optional[bool] = None
-    password: Optional[str] = None
 
 
 class UserInDB(UserBase):
     id: int
-    hashed_password: str
     is_superuser: bool
     created_at: datetime
     updated_at: Optional[datetime] = None
@@ -37,11 +35,6 @@ class User(UserBase):
 
     class Config:
         from_attributes = True
-
-
-class UserLogin(BaseModel):
-    username: str
-    password: str
 
 
 class Token(BaseModel):
