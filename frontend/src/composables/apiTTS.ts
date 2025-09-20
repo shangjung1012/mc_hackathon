@@ -12,7 +12,10 @@ export function apiTTS() {
       audioRef.value.pause()
       audioRef.value.currentTime = 0
       audioRef.value.src = url
-      audioRef.value.play()
+      audioRef.value.load()
+      audioRef.value.oncanplay = () => {
+      audioRef.value?.play()
+  }
     } else {
       // 若沒有 audio 標籤，則用 new Audio 動態播放
       const audio = new Audio(url)
