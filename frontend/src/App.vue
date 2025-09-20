@@ -2,7 +2,6 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useApi } from './composables/useApi'
 import { useTTS } from './composables/useTTS'
-import { apiTTS } from './composables/apiTTS'
 import { usePermissions } from './composables/usePermissions'
 import { useCamera } from './composables/useCamera'
 
@@ -28,8 +27,7 @@ let wishDebounceTimer: ReturnType<typeof setTimeout> | null = null
 // TTS / live region for accessibility
 const liveMessage = ref<string>('')
 // TTS composable
-const { ttsReady, pickZhVoice, ensureTtsUnlocked, speakText } = useTTS()
-const { audioUrl, audioRef, playAudioFromBackend } = apiTTS()
+const { ttsReady, pickZhVoice, ensureTtsUnlocked, speakText, audioUrl, audioRef, playAudioFromBackend } = useTTS()
 
 // Countdown state for photo (null = no countdown)
 const countdown = ref<number | null>(null)
@@ -349,6 +347,8 @@ async function takePhotoAndSend(action: string, text: string | null) {
           const ttsData = await synthesizeTTS(spoken)
           if (ttsData.audio_url) {
             playAudioFromBackend(ttsData.audio_url)
+            // 更新 audioUrl 以便後續使用 playText
+            audioUrl.value = ttsData.audio_url
           } else {
             speakText(spoken)
           }
