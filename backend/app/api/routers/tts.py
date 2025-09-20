@@ -9,43 +9,37 @@ import os
 
 router = APIRouter(prefix="/tts", tags=["text-to-speech"])
 
+def get_access_token():
+    import subprocess
+    try:
+        result = subprocess.run(['gcloud', 'auth', 'print-access-token'], 
+                              capture_output=True, text=True, check=True)
+        access_token = result.stdout.strip()
+        return access_token
+    
+    except subprocess.CalledProcessError:
+        raise Exception("Failed to get Google Cloud access token, please run 'gcloud auth login' first")
 
 def synthesize_speech(text: str, language_code: str = "cmn-CN", voice_name: str = "cmn-CN-Chirp3-HD-Achernar") -> bytes:
     """
-    使用 Google Cloud Text-to-Speech API 合成語音
+    Synthesize speech using Google Cloud Text-to-Speech API
     
     Args:
-        text: 要轉換成語音的文本
-        language_code: 語言代碼 (預設: cmn-CN)
-        voice_name: 語音名稱 (預設: cmn-CN-Chirp3-HD-Achernar)
+        text: Text to convert to speech
+        language_code: Language code (default: cmn-CN)
+        voice_name: Voice name (default: cmn-CN-Chirp3-HD-Achernar)
     
     Returns:
-        音頻數據 (bytes)
+        Audio data (bytes)
     """
-    # 獲取 gcloud 專案 ID 和存取權杖
+    # Get gcloud project ID and access token
     project_id = os.getenv("GOOGLE_PROJECT_ID")
     access_token = os.getenv("GOOGLE_ACCESS_TOKEN")
-    # import subprocess
-    # try:
-    #     result = subprocess.run(['gcloud', 'auth', 'print-access-token'], 
-    #                           capture_output=True, text=True, check=True)
-    #     access_token = result.stdout.strip()
-    # except subprocess.CalledProcessError:
-    #     raise Exception("無法獲取 Google Cloud 存取權杖，請先執行 'gcloud auth login'")
     
-    # API 端點
+    # API endpoint
     url = "https://texttospeech.googleapis.com/v1/text:synthesize"
     
-    # 請求標頭
-    headers = {
-        "Content-Type": "application/json",
-        "X-Goog-User-Project": project_id,
-        "Authorization": f"Bearer {access_token}"
-    }
-    
-    print(headers)
-    
-    # 請求數據
+    # Request data
     data = {
         "input": {
             "markup": text
@@ -60,35 +54,60 @@ def synthesize_speech(text: str, language_code: str = "cmn-CN", voice_name: str 
         }
     }
     
-    try:
-        # 發送 POST 請求
-        response = requests.post(url, headers=headers, json=data)
-        response.raise_for_status()
-        
-        # 解析回應
-        result = response.json()
-        
-        # 解碼 base64 音頻數據
-        audio_content = base64.b64decode(result["audioContent"])
-        
-        return audio_content
-        
-    except requests.exceptions.RequestException as e:
-        raise Exception(f"API 請求失敗: {e}")
-    except KeyError as e:
-        raise Exception(f"回應格式錯誤，缺少欄位: {e}")
+    # Retry mechanism: maximum 2 attempts (retry once after first failure)
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            # Request headers
+            headers = {
+                "Content-Type": "application/json",
+                "X-Goog-User-Project": project_id,
+                "Authorization": f"Bearer {access_token}"
+            }
+            
+            # Send POST request
+            response = requests.post(url, headers=headers, json=data)
+            response.raise_for_status()
+            
+            # Parse response
+            result = response.json()
+            
+            # Decode base64 audio data
+            audio_content = base64.b64decode(result["audioContent"])
+            
+            return audio_content
+            
+        except requests.exceptions.RequestException as e:
+            # If 401 error and still have retry attempts, get new access_token
+            if e.response.status_code == 401 and attempt < max_retries - 1:
+                print(f"API request failed (401), getting new access_token... (attempt {attempt + 1}/{max_retries})")
+                try:
+                    access_token = get_access_token()
+                    os.environ["GOOGLE_ACCESS_TOKEN"] = access_token
+                    print("Successfully got new access_token, retrying...")
+                    continue
+                except Exception as token_error:
+                    print(f"Failed to get new access_token: {token_error}")
+                    raise Exception(f"Failed to get new access_token: {token_error}")
+            else:
+                raise Exception(f"API request failed: {e}")
+        except KeyError as e:
+            raise Exception(f"Response format error, missing field: {e}")
+    
+    # If all retry attempts failed
+    raise Exception("All retry attempts failed")
 
 
 def save_audio_to_file(audio_data: bytes, filename: str = "output.wav") -> str:
     """
-    將音頻數據保存到檔案
+    Save audio data to file
     
     Args:
-        audio_data: 音頻數據
-        filename: 輸出檔案名稱
+        audio_data: Audio data
+        filename: Output filename
     
     Returns:
-        檔案路徑
+        File path
     """
     with open(filename, "wb") as f:
         f.write(audio_data)
@@ -110,58 +129,58 @@ class TTSResponse(BaseModel):
 @router.post("/synthesize", response_model=TTSResponse)
 async def synthesize_text_to_speech(request: TTSRequest):
     """
-    將文字轉換為語音
+    Convert text to speech
     
     Args:
-        request: 包含文字、語言代碼和語音名稱的請求
+        request: Request containing text, language code and voice name
         
     Returns:
-        包含成功狀態和音頻 URL 的回應
+        Response containing success status and audio URL
     """
     try:
-        # 使用 test.py 中的語音合成功能
+        # Use speech synthesis functionality
         audio_data = synthesize_speech(
             text=request.text,
             language_code=request.language_code,
             voice_name=request.voice_name
         )
         
-        # 將音頻數據編碼為 base64
+        # Encode audio data as base64
         audio_base64 = base64.b64encode(audio_data).decode('utf-8')
         
         return TTSResponse(
             success=True,
-            message="語音合成成功",
+            message="Speech synthesis successful",
             audio_url=f"data:audio/wav;base64,{audio_base64}"
         )
         
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"語音合成失敗: {str(e)}"
+            detail=f"Speech synthesis failed: {str(e)}"
         )
 
 
 @router.post("/synthesize-stream")
 async def synthesize_text_to_speech_stream(request: TTSRequest):
     """
-    將文字轉換為語音並以流的形式返回音頻數據
+    Convert text to speech and return audio data as stream
     
     Args:
-        request: 包含文字、語言代碼和語音名稱的請求
+        request: Request containing text, language code and voice name
         
     Returns:
-        音頻流數據
+        Audio stream data
     """
     try:
-        # 使用 test.py 中的語音合成功能
+        # Use speech synthesis functionality
         audio_data = synthesize_speech(
             text=request.text,
             language_code=request.language_code,
             voice_name=request.voice_name
         )
         
-        # 創建音頻流
+        # Create audio stream
         audio_stream = io.BytesIO(audio_data)
         
         return StreamingResponse(
@@ -175,5 +194,5 @@ async def synthesize_text_to_speech_stream(request: TTSRequest):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"語音合成失敗: {str(e)}"
+            detail=f"Speech synthesis failed: {str(e)}"
         )
