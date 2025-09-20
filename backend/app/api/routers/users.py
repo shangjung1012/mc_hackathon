@@ -1,15 +1,101 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
-
+from datetime import datetime, timedelta
+from jose import JWTError, jwt
 from ...core.database import get_db
 from ...core.logging import get_logger
-from ...schemas.user import User, UserCreate, UserUpdate
+from ...core.config import settings
+from ...schemas.user import User, UserCreate, UserUpdate, Token
 from ...services.user_service import UserService
 
 logger = get_logger("api.users")
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+def create_access_token(data: dict, expires_delta: timedelta = None):
+    """創建 JWT token"""
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(datetime.timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(datetime.timezone.utc) + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
+    return encoded_jwt
+
+
+@router.post("/register", response_model=dict)
+def register_user(username: str, db: Session = Depends(get_db)):
+    """註冊新使用者（無密碼）"""
+    logger.debug("User registration attempt", username=username)
+    
+    user_service = UserService(db)
+    
+    # 檢查使用者名稱是否已存在
+    if user_service.get_user_by_username(username):
+        logger.warning("User registration failed: username already exists", username=username)
+        raise HTTPException(
+            status_code=400,
+            detail="Username already exists"
+        )
+    
+    try:
+        # 創建用戶
+        user_data = UserCreate(username=username)
+        new_user = user_service.create_user(user_data)
+        
+        # 創建 token
+        access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
+        access_token = create_access_token(
+            data={"sub": new_user.username}, expires_delta=access_token_expires
+        )
+        
+        logger.debug("User registered successfully", user_id=new_user.id, username=new_user.username)
+        return {
+            "success": True,
+            "message": "User registered successfully",
+            "user": new_user,
+            "token": access_token
+        }
+    except Exception as e:
+        logger.error("User registration failed", username=username, error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/login", response_model=dict)
+def login_user(username: str, db: Session = Depends(get_db)):
+    """使用者登入（無密碼）"""
+    logger.debug("User login attempt", username=username)
+    
+    user_service = UserService(db)
+    user = user_service.get_user_by_username(username)
+    
+    if not user:
+        logger.warning("User login failed: user not found", username=username)
+        raise HTTPException(
+            status_code=401,
+            detail="User not found"
+        )
+    
+    try:
+        # 創建 token
+        access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
+        access_token = create_access_token(
+            data={"sub": user.username}, expires_delta=access_token_expires
+        )
+        
+        logger.debug("User logged in successfully", user_id=user.id, username=user.username)
+        return {
+            "success": True,
+            "message": "User logged in successfully",
+            "user": user,
+            "token": access_token
+        }
+    except Exception as e:
+        logger.error("User login failed", username=username, error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/", response_model=User)
