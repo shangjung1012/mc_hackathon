@@ -37,6 +37,7 @@ def _read_upload_bytes(upload: UploadFile) -> tuple[bytes, str]:
 async def analyze(
     image: Optional[UploadFile] = File(default=None),
     text: Optional[str] = Form(default=None),
+    system_instruction: Optional[str] = Form(default=None),
     model: str = Form(default="gemini-2.5-flash-lite"),
 ):
     """Accepts an image or webpage URL with optional text, then calls Gemini."""
@@ -65,8 +66,9 @@ async def analyze(
             logger.debug("Text added for analysis", text_length=len(text))
 
         # 根據模型類型設置配置
+        # 優先使用呼叫方傳入的 system_instruction，否則回退至預設 SYSTEM_PROMPT
         config_params = {
-            "system_instruction": SYSTEM_PROMPT,
+            "system_instruction": system_instruction or SYSTEM_PROMPT,
             "response_mime_type": "application/json",
             "response_schema": SpeechResponse,
         }
@@ -115,6 +117,7 @@ async def analyze(
 async def analyze_and_speak(
     image: Optional[UploadFile] = File(default=None),
     text: Optional[str] = Form(default=None),
+    system_instruction: Optional[str] = Form(default=None),
     model: str = Form(default="gemini-2.5-flash-lite"),
     language_code: str = Form(default="cmn-CN"),
     voice_name: str = Form(default="cmn-CN-Chirp3-HD-Achernar"),
@@ -126,13 +129,14 @@ async def analyze_and_speak(
     logger.debug("Gemini analyze-and-speak request", 
                 has_image=image is not None, 
                 has_text=text is not None, 
+                has_system_instruction=system_instruction is not None,
                 model=model,
                 language_code=language_code,
                 voice_name=voice_name)
     
     try:
-        # 直接調用 analyze 函數獲取文本結果
-        analysis_result = await analyze(image, text, model)
+        # 直接調用 analyze 函數獲取文本結果，並傳遞 system_instruction
+        analysis_result = await analyze(image, text, system_instruction, model)
         speech_text = analysis_result["result"]
         
         if not speech_text:

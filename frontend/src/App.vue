@@ -111,6 +111,19 @@
         </p>
       </div>
       
+      <!-- 處理狀態面板 -->
+      <div class="mt-4 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg text-left text-sm text-gray-700 dark:text-gray-300">
+        <div class="font-medium mb-2">處理狀態</div>
+  <div>流程階段: <strong>{{ processState }}</strong></div>
+  <div>最後一次 swipe: <strong>{{ lastSwipeDirection || 'none' }}</strong></div>
+  <div>是否有快取照片: <strong>{{ hasCachedPhoto() ? '是' : '否' }}</strong></div>
+        <div>照片是否已標記為上傳: <strong>{{ lastPhotoUploaded ? '是' : '否' }}</strong></div>
+        <div>請求是否已發送: <strong>{{ requestSent ? '是' : '否' }}</strong></div>
+        <div>是否收到回覆: <strong>{{ responseReceived ? '是' : '否' }}</strong></div>
+        <div v-if="responseError" class="text-red-500">錯誤: {{ responseError }}</div>
+        <div class="mt-2 text-xs text-gray-500">最近狀態訊息: {{ lastCommand }}</div>
+      </div>
+      
     </div>
   </div>
 </template>
@@ -122,6 +135,9 @@ import { useSpeechToText, type SpeechRecognitionResult } from './services/speech
 import { useCamera, type PhotoCaptureResult } from './services/cameraService'
 import { useVoiceCommand, type CommandMatch } from './services/voiceCommandService'
 
+// API base from Vite env (set VITE_API_BASE in .env)
+const API_BASE = (import.meta as any).env?.VITE_API_BASE || ''
+
 const isRecording = ref(false)
 const mediaRecorder = ref<MediaRecorder | null>(null)
 const recordingTime = ref(0)
@@ -131,6 +147,12 @@ const sessionTranscript = ref('')
 const lastSwipeDirection = ref<string | null>(null) // 'up' | 'down' | null
 const lastPhotoCache = ref<PhotoCaptureResult | null>(null)
 const lastPhotoUploaded = ref(false)
+const processState = ref<string>('idle') // 'idle'|'deciding'|'preparing'|'uploading'|'waiting'|'playing'|'done'|'error'
+const requestSent = ref(false)
+const responseReceived = ref(false)
+const responseError = ref<string | null>(null)
+
+const hasCachedPhoto = () => !!lastPhotoCache.value
 
 // 語音轉文字相關狀態
 const speechToText = useSpeechToText()
@@ -196,6 +218,27 @@ const initializeSpeechToText = () => {
 const startRecording = async () => {
   try {
     error.value = ''
+    // Try Permissions API first to give clearer guidance on mobile
+    try {
+      const perms = (navigator as any).permissions
+      if (perms && perms.query) {
+        try {
+          const status = await perms.query({ name: 'microphone' } as any)
+          if (status.state === 'denied') {
+            error.value = '麥克風權限已被拒絕，請到瀏覽器設定允許本網站使用麥克風'
+            console.warn('Microphone permission denied')
+            return
+          }
+          // if 'prompt' or 'granted', continue to request getUserMedia
+        } catch (e) {
+          // Permissions API may not support 'microphone' on some browsers; ignore
+          console.debug('Permissions API microphone query not available or failed', e)
+        }
+      }
+    } catch (e) {
+      console.debug('Permissions API not available', e)
+    }
+
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
     
     mediaRecorder.value = new MediaRecorder(stream)
@@ -230,7 +273,17 @@ const startRecording = async () => {
     }, 1000)
     
   } catch (err) {
-    error.value = '無法訪問麥克風，請檢查權限設定'
+    // Provide more actionable messages for mobile Chrome
+    const msg = (err && (err as any).name) ? (err as any).name : String(err)
+    if (msg === 'NotAllowedError' || msg === 'SecurityError') {
+      error.value = '麥克風權限被拒絕：請在瀏覽器或系統設定中允許麥克風使用（需 HTTPS）'
+    } else if (msg === 'NotFoundError' || msg === 'OverconstrainedError') {
+      error.value = '未找到麥克風裝置，請確認裝置有可用的麥克風'
+    } else if (msg === 'NotReadableError') {
+      error.value = '無法讀取麥克風，請確認其他應用程式未占用麥克風'
+    } else {
+      error.value = '無法訪問麥克風，請檢查權限設定與瀏覽器設定'
+    }
     console.error('錄音錯誤:', err)
   }
 }
@@ -272,28 +325,23 @@ const onActionTap = () => {
 }
 
 const onActionHold = () => {
-  // 長按可以進入相機模式作示範
-  enterCameraMode()
+  // 長按在桌面上模擬向上滑，啟動自動拍照（方便測試）
+  lastSwipeDirection.value = 'up'
+  void autoCaptureForSwipe('up')
 }
 
 const onActionSwipe = (direction: string) => {
   lastCommand.value = `swipe: ${direction}`
-  // 根據方向執行不同動作
+  // record swipe direction so subsequent recording uses correct scenario
+  lastSwipeDirection.value = direction
+  // 每次上/下/任意 swipe 都自動開啟相機拍照並回到主畫面
+  void autoCaptureForSwipe(direction)
+  // 保留左右滑示例回饋文字
   switch (direction) {
-    case 'up':
-      // 顯示範例動作：拍照（需在相機模式下）
-      if (cameraMode.value) takePhoto()
-      break
-    case 'down':
-      // 關閉相機模式
-      if (cameraMode.value) exitCameraMode()
-      break
     case 'left':
-      // 範例：顯示上一張（暫未實作）
       lastCommand.value = '向左滑 — previous (未實作)'
       break
     case 'right':
-      // 範例：顯示下一張（暫未實作）
       lastCommand.value = '向右滑 — next (未實作)'
       break
   }
@@ -392,6 +440,92 @@ const takePhoto = async () => {
   }
 }
 
+// play a short beep sound (use WebAudio or simple Audio) for feedback
+function playBeep() {
+  try {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
+    const o = ctx.createOscillator()
+    const g = ctx.createGain()
+    o.type = 'sine'
+    o.frequency.value = 880
+    g.gain.value = 0.05
+    o.connect(g)
+    g.connect(ctx.destination)
+    o.start()
+    setTimeout(() => {
+      o.stop()
+      try { ctx.close() } catch (e) {}
+    }, 150)
+  } catch (e) {
+    // fallback: use simple Audio with a small base64 beep (optional)
+    console.warn('WebAudio not available for beep', e)
+  }
+}
+
+// Auto open camera, capture photo and play beep for swipe events, then go back to main view
+async function autoCaptureForSwipe(direction: string) {
+  try {
+    error.value = ''
+    cameraMode.value = true
+    await nextTick()
+    if (videoElement.value) {
+      await camera.initialize(videoElement.value)
+    }
+    // wait for video to receive first frames (avoid capturing a black frame)
+    const video = videoElement.value
+    if (video) {
+      const start = Date.now()
+      const timeout = 2000 // ms
+      // If browser supports requestVideoFrameCallback use it once
+      if ((video as any).requestVideoFrameCallback) {
+        await new Promise<void>((resolve) => {
+          try {
+            ;(video as any).requestVideoFrameCallback(() => resolve())
+          } catch (e) {
+            // fallback to animation frame loop
+            const check = () => {
+              if (video.videoWidth > 0 && video.videoHeight > 0 && video.readyState >= 2) return resolve()
+              if (Date.now() - start > timeout) return resolve()
+              requestAnimationFrame(check)
+            }
+            check()
+          }
+        })
+      } else {
+        await new Promise<void>((resolve) => {
+          const check = () => {
+            if (video.videoWidth > 0 && video.videoHeight > 0 && video.readyState >= 2) return resolve()
+            if (Date.now() - start > timeout) return resolve()
+            requestAnimationFrame(check)
+          }
+          check()
+        })
+      }
+      // short stabilization delay
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    playBeep()
+    const photo = await camera.capturePhoto()
+    if (photo) {
+      latestPhoto.value = photo
+      lastPhotoCache.value = photo
+      lastPhotoUploaded.value = false
+      // 播放成功提示
+      lastCommand.value = '拍照完成，返回主畫面'
+      setTimeout(() => (lastCommand.value = ''), 1500)
+    }
+  } catch (err) {
+    console.error('auto capture failed', err)
+    error.value = '拍照失敗'
+  } finally {
+    // 確保回到主畫面
+    camera.stop()
+    cameraMode.value = false
+    // 清除 video element
+    await nextTick()
+  }
+}
+
 
 
 // 初始化
@@ -437,6 +571,11 @@ async function processAfterRecording(transcript: string) {
   }
 
   // Decide scenario
+  processState.value = 'deciding'
+  responseError.value = null
+  responseReceived.value = false
+  requestSent.value = false
+
   let system_instruction = ''
   let photoToSend: Blob | null = null
 
@@ -454,29 +593,33 @@ async function processAfterRecording(transcript: string) {
     }
   } else {
     // no swipe before recording
-    if (lastPhotoCache.value && !lastPhotoUploaded.value) {
-      // attach previous photo but use scenario 2 behavior
+    if (lastPhotoCache.value) {
+      // attach previous photo (even if already uploaded before) but use scenario 2 behavior
       system_instruction = '請簡短快速地回答，重點即可。'
       photoToSend = await downscaleDataUrl(lastPhotoCache.value.dataUrl, 640)
     } else {
-      // no photo ever taken or already uploaded -> only text
+      // no photo ever taken -> only text
       system_instruction = '請簡短快速地回答，重點即可。'
       photoToSend = null
     }
   }
 
-  // Build form data
+  // Build form data and call backend /gemini/analyze-and-speak
   try {
+    processState.value = 'preparing'
     const form = new FormData()
-    form.append('transcript', transcript)
+    // backend analyze-and-speak expects 'text' field (we use transcript)
+    form.append('text', transcript)
     form.append('system_instruction', system_instruction)
     if (photoToSend) {
-      form.append('photo', photoToSend, 'photo.jpg')
+      form.append('image', photoToSend, 'photo.jpg')
     }
 
-    lastCommand.value = '上傳中...'
+    lastCommand.value = '上傳並合成語音中...'
+    processState.value = 'uploading'
+    requestSent.value = true
 
-    const res = await fetch('/api/process', {
+    const res = await fetch(`${API_BASE}/gemini/analyze-and-speak`, {
       method: 'POST',
       body: form
     })
@@ -486,8 +629,69 @@ async function processAfterRecording(transcript: string) {
       throw new Error(`API 回傳錯誤: ${res.status} ${text}`)
     }
 
-    const data = await res.json().catch(() => null)
-    lastCommand.value = '上傳完成'
+    // We expect audio/wav stream
+    processState.value = 'waiting'
+    const contentType = res.headers.get('content-type') || ''
+    console.debug('Response Content-Type:', contentType)
+
+    // If backend didn't return audio, read text for diagnostics
+    if (!contentType.includes('audio')) {
+      const text = await res.text().catch(() => null)
+      console.error('Expected audio but got:', contentType, text)
+      responseError.value = `後端回傳非音訊 (content-type=${contentType})：${text ? text.substring(0,200) : '無內容'}`
+      processState.value = 'error'
+      return
+    }
+
+    const blob = await res.blob()
+    responseReceived.value = true
+    console.debug('Received blob:', { size: blob.size, type: blob.type })
+    processState.value = 'playing'
+
+    // play audio automatically with robust error handling
+    try {
+      const url = URL.createObjectURL(blob)
+      const audio = new Audio()
+      audio.src = url
+      audio.crossOrigin = 'anonymous'
+      audio.preload = 'auto'
+
+      // handle load success
+      const playPromise = new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          audio.oncanplaythrough = null
+          audio.onerror = null
+        }
+        audio.oncanplaythrough = () => {
+          cleanup()
+          audio.play().then(() => resolve()).catch((e) => {
+            console.warn('audio.play() rejected', e)
+            reject(e)
+          })
+        }
+        audio.onerror = (ev) => {
+          cleanup()
+          const err = (ev && (ev as any).error) ? (ev as any).error : 'Unknown audio load error'
+          console.error('Audio failed to load', err)
+          reject(err)
+        }
+        // start loading
+        try { audio.load() } catch (e) { /* ignore */ }
+      })
+
+      await playPromise.catch((e) => {
+        console.warn('自動播放或載入失敗', e)
+        throw e
+      })
+
+      processState.value = 'done'
+    } catch (e) {
+      console.error('播放音檔失敗', e)
+      processState.value = 'error'
+      responseError.value = `播放失敗: ${String(e)}`
+    }
+
+  lastCommand.value = '完成'
     // mark photo as uploaded if we sent one
     if (photoToSend && lastPhotoCache.value) {
       lastPhotoUploaded.value = true
@@ -495,10 +699,12 @@ async function processAfterRecording(transcript: string) {
     // 清理 swipe flag
     lastSwipeDirection.value = null
     setTimeout(() => (lastCommand.value = ''), 2000)
-    return data
+    return { ok: true }
   } catch (err: any) {
-    console.error('上傳失敗:', err)
-    lastCommand.value = '上傳失敗'
+    console.error('上傳或合成語音失敗:', err)
+    responseError.value = String(err)
+    processState.value = 'error'
+    lastCommand.value = '上傳或合成失敗'
     setTimeout(() => (lastCommand.value = ''), 3000)
   }
 }
