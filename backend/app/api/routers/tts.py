@@ -6,6 +6,9 @@ import io
 import base64
 import requests
 import os
+from app.core.logging import get_logger
+
+logger = get_logger("api.tts")
 
 router = APIRouter(prefix="/tts", tags=["text-to-speech"])
 
@@ -137,6 +140,11 @@ async def synthesize_text_to_speech(request: TTSRequest):
     Returns:
         Response containing success status and audio URL
     """
+    logger.debug("TTS synthesis request", 
+                text_length=len(request.text), 
+                language_code=request.language_code, 
+                voice_name=request.voice_name)
+    
     try:
         # Use speech synthesis functionality
         audio_data = synthesize_speech(
@@ -148,6 +156,8 @@ async def synthesize_text_to_speech(request: TTSRequest):
         # Encode audio data as base64
         audio_base64 = base64.b64encode(audio_data).decode('utf-8')
         
+        logger.debug("TTS synthesis completed successfully", audio_size=len(audio_data))
+        
         return TTSResponse(
             success=True,
             message="Speech synthesis successful",
@@ -155,6 +165,7 @@ async def synthesize_text_to_speech(request: TTSRequest):
         )
         
     except Exception as e:
+        logger.error("TTS synthesis failed", error=str(e), exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Speech synthesis failed: {str(e)}"
@@ -172,6 +183,11 @@ async def synthesize_text_to_speech_stream(request: TTSRequest):
     Returns:
         Audio stream data
     """
+    logger.debug("TTS stream synthesis request", 
+                text_length=len(request.text), 
+                language_code=request.language_code, 
+                voice_name=request.voice_name)
+    
     try:
         # Use speech synthesis functionality
         audio_data = synthesize_speech(
@@ -183,6 +199,8 @@ async def synthesize_text_to_speech_stream(request: TTSRequest):
         # Create audio stream
         audio_stream = io.BytesIO(audio_data)
         
+        logger.debug("TTS stream synthesis completed successfully", audio_size=len(audio_data))
+        
         return StreamingResponse(
             io.BytesIO(audio_data),
             media_type="audio/wav",
@@ -192,6 +210,7 @@ async def synthesize_text_to_speech_stream(request: TTSRequest):
         )
         
     except Exception as e:
+        logger.error("TTS stream synthesis failed", error=str(e), exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Speech synthesis failed: {str(e)}"

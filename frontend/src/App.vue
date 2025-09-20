@@ -1,627 +1,505 @@
+<template>
+  <div class="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center">
+    <!-- 相機模式 -->
+    <div v-if="cameraMode" class="w-full min-h-screen flex flex-col">
+      <!-- 相機預覽區域 -->
+      <div class="flex flex-col items-center justify-center bg-black py-8">
+        <div class="relative w-full max-w-2xl mx-auto">
+          <video 
+            ref="videoElement"
+            class="w-full h-auto rounded-lg shadow-lg max-h-96"
+            autoplay
+            muted
+            playsinline
+          ></video>
+          <div v-if="isListening" class="absolute top-4 right-4 flex items-center space-x-2 bg-black bg-opacity-50 text-white px-3 py-2 rounded-full">
+            <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+            <span class="text-sm">語音識別中...</span>
+          </div>
+          <div v-if="lastCommand" class="absolute bottom-4 left-4 bg-black bg-opacity-50 text-white px-3 py-2 rounded-lg">
+            <span class="text-sm">指令: {{ lastCommand }}</span>
+          </div>
+        </div>
+      </div>
+      
+      <!-- 照片預覽區域 -->
+      <div v-if="latestPhoto" class="bg-gray-100 dark:bg-gray-800 p-6 flex-1">
+        <div class="max-w-4xl mx-auto">
+          <h3 class="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-4 text-center">
+            最新照片
+          </h3>
+          <div class="flex justify-center">
+            <img 
+              :src="latestPhoto.dataUrl" 
+              :alt="`照片拍攝於 ${latestPhoto.timestamp.toLocaleString()}`"
+              class="max-w-full h-auto rounded-lg shadow-lg"
+            />
+          </div>
+          <p class="text-sm text-gray-600 dark:text-gray-400 text-center mt-3">
+            拍攝時間: {{ latestPhoto.timestamp.toLocaleString() }}
+          </p>
+        </div>
+      </div>
+      
+      <!-- 控制按鈕 -->
+      <div class="bg-white dark:bg-gray-900 p-4 flex justify-center">
+        <button 
+          @click="exitCameraMode"
+          class="px-6 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+        >
+          退出拍照模式
+        </button>
+      </div>
+    </div>
+
+    <!-- 錄音模式 -->
+    <div v-else class="text-center max-w-2xl mx-auto px-4">
+      <!-- 錄音按鈕：支援 tap/hold/swipe -->
+      <ActionButton
+        class="w-48 h-48 rounded-full transition-all duration-300 transform hover:scale-105 active:scale-95 focus:outline-none focus:ring-4 focus:ring-opacity-50 flex items-center justify-center"
+        :holdDuration="600"
+        :swipeThreshold="40"
+        @tap="onActionTap"
+        @hold="onActionHold"
+        @swipe="onActionSwipe"
+        :aria-label="isRecording ? '停止錄音' : '開始錄音'"
+      >
+        <div :class="[
+          'flex items-center justify-center h-full w-full rounded-full',
+          isRecording ? 'bg-red-500 hover:bg-red-600 focus:ring-red-300 shadow-lg shadow-red-200' : 'bg-blue-500 hover:bg-blue-600 focus:ring-blue-300 shadow-lg shadow-blue-200'
+        ]">
+          <div v-if="!isRecording" class="w-0 h-0 border-l-[24px] border-l-white border-t-[18px] border-t-transparent border-b-[18px] border-b-transparent ml-2"></div>
+          <div v-else class="w-8 h-8 bg-white rounded-sm"></div>
+        </div>
+      </ActionButton>
+      
+      <!-- 狀態文字 -->
+      <p v-if="isRecording" class="mt-6 text-lg font-medium text-gray-700 dark:text-gray-300">
+        錄音中... 點擊停止
+      </p>
+      
+      <!-- 錄音時間顯示 -->
+      <p v-if="isRecording" class="mt-2 text-sm text-gray-500 dark:text-gray-400">
+        錄音時間: {{ formatTime(recordingTime) }}
+      </p>
+
+      <!-- 語音識別狀態 -->
+      <div v-if="speechRecognitionSupported" class="mt-4">
+        <div v-if="isListening" class="flex items-center justify-center space-x-2 text-green-600 dark:text-green-400">
+          <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+          <span class="text-sm">語音識別中...</span>
+        </div>
+      </div>
+
+      <!-- 語音轉文字結果 -->
+      <div v-if="transcriptText" class="mt-6 text-center">
+        <p class="text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap">{{ transcriptText }}</p>
+        <div v-if="isListening && interimText" class="mt-2 text-sm text-gray-500 dark:text-gray-400 italic">
+          即時識別: {{ interimText }}
+        </div>
+      </div>
+      
+      <!-- 錯誤訊息 -->
+      <p v-if="error" class="mt-4 text-red-500 text-sm">
+        {{ error }}
+      </p>
+
+      <!-- 語音識別不支援提示 -->
+      <div v-if="!speechRecognitionSupported" class="mt-4 p-3 bg-yellow-100 dark:bg-yellow-900 rounded-lg">
+        <p class="text-sm text-yellow-800 dark:text-yellow-200">
+          此瀏覽器不支援語音識別功能，僅能錄音
+        </p>
+      </div>
+      
+    </div>
+  </div>
+</template>
+
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
-import { useApi } from './composables/useApi'
-import { useTTS } from './composables/useTTS'
-import { apiTTS } from './composables/apiTTS'
-import { usePermissions } from './composables/usePermissions'
-import { useCamera } from './composables/useCamera'
+import { ref, onUnmounted, nextTick } from 'vue'
+import ActionButton from './components/ActionButton.vue'
+import { useSpeechToText, type SpeechRecognitionResult } from './services/speechToText'
+import { useCamera, type PhotoCaptureResult } from './services/cameraService'
+import { useVoiceCommand, type CommandMatch } from './services/voiceCommandService'
 
-type HealthState = 'idle' | 'loading' | 'ok' | 'error'
+const isRecording = ref(false)
+const mediaRecorder = ref<MediaRecorder | null>(null)
+const recordingTime = ref(0)
+const error = ref('')
+const recordingInterval = ref<number | null>(null)
+const sessionTranscript = ref('')
+const lastSwipeDirection = ref<string | null>(null) // 'up' | 'down' | null
+const lastPhotoCache = ref<PhotoCaptureResult | null>(null)
+const lastPhotoUploaded = ref(false)
 
-const capturedImageUrl = ref<string | null>(null)
-const { videoEl, cameraReady, cameraError, startCamera, stopCamera, captureFrame } = useCamera()
-const cameraActivated = ref(false)
-const health = ref<HealthState>('idle')
-// Speech recognition state
-const recognizing = ref(false)
-const transcript = ref<string>('')
-const subtitles = ref<string[]>([])
-const recognitionSupported = ref<boolean>(typeof window !== 'undefined' && (!!(window as any).SpeechRecognition || !!(window as any).webkitSpeechRecognition))
-let recognition: any = null
-let shouldKeepRecognizing = false
-let debounceTimer: ReturnType<typeof setTimeout> | null = null
-let pendingFinalText = ''
-// Shopping mode state
-const shoppingMode = ref(false)
-let currentWish = ''
-let wishDebounceTimer: ReturnType<typeof setTimeout> | null = null
-// TTS / live region for accessibility
-const liveMessage = ref<string>('')
-// TTS composable
-const { ttsReady, pickZhVoice, ensureTtsUnlocked, speakText } = useTTS()
-const { audioUrl, audioRef, playAudioFromBackend } = apiTTS()
+// 語音轉文字相關狀態
+const speechToText = useSpeechToText()
+const speechRecognitionSupported = ref(false)
+const isListening = ref(false)
+const transcriptText = ref('')
+const interimText = ref('')
 
-// Countdown state for photo (null = no countdown)
-const countdown = ref<number | null>(null)
+// 相機相關狀態
+const cameraMode = ref(false)
+const videoElement = ref<HTMLVideoElement | null>(null)
+const camera = useCamera()
+const lastCommand = ref('')
+const latestPhoto = ref<PhotoCaptureResult | null>(null)
 
-// Hold music (Web Audio) state
-let audioCtx: AudioContext | null = null
-let holdGain: GainNode | null = null
-let holdOsc: OscillatorNode | null = null
-let holdInterval: number | null = null
-// HTMLAudio fallback/source
-let holdAudioEl: HTMLAudioElement | null = null
-const HOLD_MUSIC_URL = (import.meta.env.VITE_HOLD_MUSIC_URL as string) || '/hold_music.mp3'
+// 語音指令相關狀態
+const voiceCommand = useVoiceCommand()
 
-async function startHoldMusic() {
-  try {
-    // If an audio file exists (public/hold_music.mp3 or VITE_HOLD_MUSIC_URL), try to play it first
-    try {
-      // create or reuse audio element
-      if (!holdAudioEl) {
-        holdAudioEl = new Audio(HOLD_MUSIC_URL)
-        holdAudioEl.loop = true
-        holdAudioEl.preload = 'auto'
-        holdAudioEl.crossOrigin = 'anonymous'
+// 格式化時間顯示
+const formatTime = (seconds: number): string => {
+  const mins = Math.floor(seconds / 60)
+  const secs = seconds % 60
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+}
+
+// 初始化語音轉文字
+const initializeSpeechToText = () => {
+  speechRecognitionSupported.value = speechToText.isSupported()
+  
+  if (speechRecognitionSupported.value) {
+    speechToText.setCallbacks({
+      onResult: (result: SpeechRecognitionResult) => {
+      if (result.isFinal) {
+        transcriptText.value += result.transcript + ' '
+        interimText.value = ''
+          
+        // 累積本次錄音 session 的 transcript
+        sessionTranscript.value += result.transcript + ' '
+
+        // 處理語音指令
+        handleVoiceCommand(result.transcript)
+        } else {
+          interimText.value = result.transcript
+        }
+      },
+      onError: (errorMsg: string) => {
+        error.value = errorMsg
+      },
+      onStart: () => {
+        isListening.value = true
+      },
+      onEnd: () => {
+        isListening.value = false
+      },
+      onNoMatch: () => {
+        // 可以選擇是否顯示無匹配訊息
       }
-
-      // Try to play; browsers require user gesture. If play succeeds, skip WebAudio oscillator.
-      const playPromise = holdAudioEl.play()
-      if (playPromise && typeof playPromise.then === 'function') {
-        await playPromise
-        return
-      }
-    } catch (e) {
-      // fall through to WebAudio oscillator if audio element playback fails
-    }
-    if (!('AudioContext' in window || 'webkitAudioContext' in window)) return
-    if (!audioCtx) {
-      // @ts-ignore
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)()
-    }
-    // resume context (user gesture may be required)
-    try { await audioCtx.resume() } catch {}
-
-    stopHoldMusic()
-
-    holdGain = audioCtx.createGain()
-    holdGain.gain.value = 0.0
-    holdGain.connect(audioCtx.destination)
-
-    holdOsc = audioCtx.createOscillator()
-    holdOsc.type = 'sine'
-    holdOsc.frequency.value = 440
-    holdOsc.connect(holdGain)
-    holdOsc.start()
-
-    // fade in quickly
-    holdGain.gain.cancelScheduledValues(audioCtx.currentTime)
-    holdGain.gain.setValueAtTime(0.0, audioCtx.currentTime)
-    holdGain.gain.linearRampToValueAtTime(0.06, audioCtx.currentTime + 0.2)
-
-    // pattern: alternate between two frequencies to simulate hold music
-    let step = 0
-    holdInterval = window.setInterval(() => {
-      if (!holdOsc) return
-      step = (step + 1) % 4
-      const freq = [440, 660, 550, 770][step]
-      try { holdOsc.frequency.setValueAtTime(freq, audioCtx!.currentTime) } catch {}
-    }, 600)
-  } catch (e) {
-    console.warn('startHoldMusic failed', e)
+    })
   }
 }
 
-function stopHoldMusic() {
+// 開始錄音
+const startRecording = async () => {
   try {
-    // stop HTMLAudio if playing
-    try {
-      if (holdAudioEl) {
-        try { holdAudioEl.pause() } catch {}
-        try { holdAudioEl.currentTime = 0 } catch {}
-      }
-    } catch {}
-    if (holdInterval) { clearInterval(holdInterval); holdInterval = null }
-    if (holdGain && audioCtx) {
-      holdGain.gain.cancelScheduledValues(audioCtx.currentTime)
-      holdGain.gain.linearRampToValueAtTime(0.0, audioCtx.currentTime + 0.15)
+    error.value = ''
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    
+    mediaRecorder.value = new MediaRecorder(stream)
+    
+    mediaRecorder.value.onstop = () => {
+      // 停止所有音軌
+      stream.getTracks().forEach(track => track.stop())
     }
-    if (holdOsc) {
-      try { holdOsc.stop(audioCtx ? audioCtx.currentTime + 0.16 : 0) } catch {}
-      holdOsc.disconnect()
-      holdOsc = null
+    
+    mediaRecorder.value.start()
+    isRecording.value = true
+    recordingTime.value = 0
+    
+    // 開始語音識別
+    if (speechRecognitionSupported.value) {
+      // 確保語音識別實例正確初始化
+      try {
+        speechToText.startListening()
+      } catch (error) {
+        console.warn('語音識別啟動失敗，嘗試重新初始化:', error)
+        // 如果啟動失敗，重新初始化並重試
+        speechToText.reinitialize()
+        setTimeout(() => {
+          speechToText.startListening()
+        }, 100)
+      }
     }
-    if (holdGain) { holdGain.disconnect(); holdGain = null }
-  } catch (e) {
-    console.warn('stopHoldMusic failed', e)
-  }
-}
-
-function startCountdown(seconds = 3) {
-  return new Promise<void>((resolve) => {
-    countdown.value = seconds
-    // speak first number immediately
-    try { speakText(String(countdown.value)) } catch {}
-    const iv = setInterval(() => {
-      if (countdown.value === null) {
-        clearInterval(iv)
-        resolve()
-        return
-      }
-      countdown.value = (countdown.value || 0) - 1
-      if (countdown.value! > 0) {
-        try { speakText(String(countdown.value)) } catch {}
-      }
-      if (countdown.value! <= 0) {
-        clearInterval(iv)
-        try { speakText('拍照') } catch {}
-        // small delay to let '拍照' start
-        setTimeout(() => { countdown.value = null; resolve() }, 250)
-      }
+    
+    // 開始計時
+    recordingInterval.value = window.setInterval(() => {
+      recordingTime.value++
     }, 1000)
+    
+  } catch (err) {
+    error.value = '無法訪問麥克風，請檢查權限設定'
+    console.error('錄音錯誤:', err)
+  }
+}
+
+// 停止錄音
+const stopRecording = () => {
+  if (mediaRecorder.value && isRecording.value) {
+    mediaRecorder.value.stop()
+    isRecording.value = false
+    
+    // 停止語音識別
+    if (speechRecognitionSupported.value) {
+      speechToText.stopListening()
+    }
+    
+    if (recordingInterval.value) {
+      clearInterval(recordingInterval.value)
+      recordingInterval.value = null
+    }
+    // 錄音停止後處理：將 sessionTranscript 與照片上傳
+    void processAfterRecording(sessionTranscript.value)
+  }
+}
+
+// 切換錄音狀態
+const toggleRecording = () => {
+  if (isRecording.value) {
+    stopRecording()
+  } else {
+    // 開始新的 session transcript
+    sessionTranscript.value = ''
+    startRecording()
+  }
+}
+
+// ActionButton 事件處理
+const onActionTap = () => {
+  toggleRecording()
+}
+
+const onActionHold = () => {
+  // 長按可以進入相機模式作示範
+  enterCameraMode()
+}
+
+const onActionSwipe = (direction: string) => {
+  lastCommand.value = `swipe: ${direction}`
+  // 根據方向執行不同動作
+  switch (direction) {
+    case 'up':
+      // 顯示範例動作：拍照（需在相機模式下）
+      if (cameraMode.value) takePhoto()
+      break
+    case 'down':
+      // 關閉相機模式
+      if (cameraMode.value) exitCameraMode()
+      break
+    case 'left':
+      // 範例：顯示上一張（暫未實作）
+      lastCommand.value = '向左滑 — previous (未實作)'
+      break
+    case 'right':
+      // 範例：顯示下一張（暫未實作）
+      lastCommand.value = '向右滑 — next (未實作)'
+      break
+  }
+
+  setTimeout(() => (lastCommand.value = ''), 2000)
+}
+
+// 處理語音指令
+const handleVoiceCommand = (transcript: string) => {
+  const match = voiceCommand.matchCommand(transcript)
+  if (match) {
+    lastCommand.value = match.matchedText
+    console.log('語音指令匹配:', match)
+    
+    switch (match.command.action) {
+      case 'camera_mode':
+        enterCameraMode()
+        break
+      case 'take_photo':
+        if (cameraMode.value) {
+          takePhoto()
+        }
+        break
+      case 'close_camera':
+        if (cameraMode.value) {
+          exitCameraMode()
+        }
+        break
+    }
+    
+    // 清除指令顯示
+    setTimeout(() => {
+      lastCommand.value = ''
+    }, 3000)
+  }
+}
+
+// 進入相機模式
+const enterCameraMode = async () => {
+  try {
+    error.value = ''
+    cameraMode.value = true
+    
+    await nextTick()
+    
+    if (videoElement.value) {
+      await camera.initialize(videoElement.value)
+    }
+    
+    // 開始語音識別
+    if (speechRecognitionSupported.value) {
+      speechToText.startListening()
+    }
+  } catch (err) {
+    error.value = '無法啟動相機模式'
+    console.error('相機模式啟動失敗:', err)
+    cameraMode.value = false
+  }
+}
+
+// 退出相機模式
+const exitCameraMode = () => {
+  cameraMode.value = false
+  camera.stop()
+  
+  // 停止語音識別
+  if (speechRecognitionSupported.value) {
+    speechToText.stopListening()
+  }
+  
+  // 清除照片預覽
+  latestPhoto.value = null
+}
+
+// 拍照
+const takePhoto = async () => {
+  try {
+    const photo = await camera.capturePhoto()
+    if (photo) {
+      console.log('拍照成功:', photo)
+
+      // 保存最新照片並快取（尚未上傳）
+      latestPhoto.value = photo
+      lastPhotoCache.value = photo
+      lastPhotoUploaded.value = false
+
+      // 顯示拍照成功提示
+      lastCommand.value = '拍照成功！'
+      setTimeout(() => {
+        lastCommand.value = ''
+      }, 2000)
+    }
+  } catch (err) {
+    console.error('拍照失敗:', err)
+    error.value = '拍照失敗'
+  }
+}
+
+
+
+// 初始化
+initializeSpeechToText()
+
+// 清理資源
+onUnmounted(() => {
+  if (recordingInterval.value) {
+    clearInterval(recordingInterval.value)
+  }
+  speechToText.destroy()
+  camera.destroy()
+  voiceCommand.destroy()
+})
+
+// helper: downscale dataUrl to maxWidth (preserves aspect ratio). returns Blob
+function downscaleDataUrl(dataUrl: string, maxWidth: number): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => {
+      const ratio = img.width > maxWidth ? maxWidth / img.width : 1
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.round(img.width * ratio)
+      canvas.height = Math.round(img.height * ratio)
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return reject(new Error('無法取得 canvas context'))
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob)
+        else reject(new Error('toBlob 失敗'))
+      }, 'image/jpeg', 0.8)
+    }
+    img.onerror = (e) => reject(e)
+    img.src = dataUrl
   })
 }
 
-// Recognition restart/backoff state
-let restartAttempts = 0
-const maxRestartAttempts = 6
-const { micPermission, cameraPermission, refreshPermissionsFromDevices, checkMicPermission, checkCameraPermission, cleanupPermissionWatchers } = usePermissions()
-
-// API helpers
-const { checkBackendHealth: apiCheckHealth, analyze } = useApi()
-const { synthesizeTTS } = useApi()
-
-if (recognitionSupported.value) {
-  const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-  recognition = new SpeechRecognition()
-  // try to enable continuous; some implementations ignore it
-  recognition.continuous = true
-  recognition.lang = 'zh-TW'
-  recognition.interimResults = true
-  recognition.maxAlternatives = 1
-
-  recognition.onstart = () => {
-    recognizing.value = true
-    // On many mobile browsers, Permissions API for microphone is unreliable
-    // Mark mic as granted when recognition actually starts
-    micPermission.value = 'granted'
-  }
-
-  recognition.onresult = (event: any) => {
-    let interim = ''
-    let final = ''
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const res = event.results[i]
-      if (res.isFinal) final += res[0].transcript
-      else interim += res[0].transcript
-    }
-    
-    // Update transcript with both final and interim for full display
-    if (final.trim()) {
-      transcript.value = (transcript.value + ' ' + final).trim()
-      pendingFinalText = final.trim()
-
-      // Keyword detection: shopping mode and related commands
-      try {
-        const text = final.trim()
-        // 開啟逛街模式
-        if (!shoppingMode.value && (text.includes('開啟逛街模式') || text.includes('開始逛街模式'))) {
-          shoppingMode.value = true
-          cameraActivated.value = true
-          // start camera and immediately take photo and notify backend with action=open
-          startCamera({ cameraPermissionRef: cameraPermission, refreshPermissionsFromDevices }).then(() => {
-            setTimeout(() => {
-              takePhotoAndSend('open', null)
-            }, 500)
-          })
-        }
-
-        // Detect user wants (start collecting after keyword 我想要)
-        if (shoppingMode.value && text.includes('我想要')) {
-          const idx = text.indexOf('我想要')
-          const after = text.slice(idx + 3).trim()
-          if (after) {
-            currentWish += (currentWish ? ' ' : '') + after
-          }
-          if (wishDebounceTimer) clearTimeout(wishDebounceTimer)
-          wishDebounceTimer = setTimeout(() => {
-            if (currentWish.trim()) {
-              takePhotoAndSend('shopping', currentWish.trim())
-            }
-            currentWish = ''
-            wishDebounceTimer = null
-          }, 1200)
-        }
-
-        // 結束逛街模式
-        if (shoppingMode.value && (text.includes('結束逛街模式') || text.includes('離開逛街模式'))) {
-          takePhotoAndSend('close', null)
-          shoppingMode.value = false
-          currentWish = ''
-          if (wishDebounceTimer) { clearTimeout(wishDebounceTimer); wishDebounceTimer = null }
-          stopCamera()
-        }
-
-        // 保留原先開啟拍照模式關鍵字
-        if (!cameraActivated.value && text.includes('開啟拍照模式')) {
-          cameraActivated.value = true
-          startCamera({ cameraPermissionRef: cameraPermission, refreshPermissionsFromDevices })
-        }
-      } catch {}
-      
-      // Debounce subtitle updates - only add to subtitles after text is stable
-      if (debounceTimer) clearTimeout(debounceTimer)
-      debounceTimer = setTimeout(() => {
-        if (pendingFinalText.trim()) {
-          subtitles.value.push(pendingFinalText.trim())
-          pendingFinalText = ''
-        }
-      }, 700)
-    }
-    
-    // Show interim results only in transcript, not in subtitles
-    if (interim.trim()) {
-      // Don't modify transcript with interim to avoid duplication
-      // Just let user see interim in real-time without adding to history
-    }
-  }
-
-  recognition.onerror = (e: any) => {
-    console.error('Speech recognition error', e)
-  }
-
-  recognition.onend = () => {
-    recognizing.value = false
-    
-    // Flush any pending final text immediately when recognition ends
-    if (debounceTimer) {
-      clearTimeout(debounceTimer)
-      debounceTimer = null
-    }
-    if (pendingFinalText.trim()) {
-      subtitles.value.push(pendingFinalText.trim())
-      pendingFinalText = ''
-    }
-    
-    // Robust restart: only restart if requested; use backoff to avoid busy-loop failures
-    if (shouldKeepRecognizing) {
-      restartAttempts = Math.min(maxRestartAttempts, restartAttempts + 1)
-      const backoffMs = Math.min(200 * Math.pow(2, restartAttempts - 1), 5000)
-      setTimeout(() => {
-        try {
-          recognition.start()
-          // success: reset attempts
-          restartAttempts = 0
-        } catch (e) {
-          console.warn('restart recognition failed', e)
-        }
-      }, backoffMs)
-    }
-  }
-}
-
-function onTtsUnlockClick() {
-  try {
-    ensureTtsUnlocked()
-    if (ttsReady.value) liveMessage.value = '語音已啟用'
-  } catch {}
-}
-
-async function takePhoto() {
-  try {
-    // countdown before capture
-    await startCountdown(3)
-    const frame = await captureFrame()
-    if (!frame) return
-    if (capturedImageUrl.value) URL.revokeObjectURL(capturedImageUrl.value)
-    capturedImageUrl.value = frame.url
-    await checkBackendHealth()
-  } catch (e) {
-    console.error('takePhoto failed', e)
-  }
-}
-
-function backToCapture() {
-  if (capturedImageUrl.value) URL.revokeObjectURL(capturedImageUrl.value)
-  capturedImageUrl.value = null
-  health.value = 'idle'
-}
-
-// helper: take photo blob and send to backend /gemini/analyze with action
-async function takePhotoAndSend(action: string, text: string | null) {
-  try {
-    // countdown before capture/analysis
-    await startCountdown(3)
-    const frame = await captureFrame()
-    if (!frame) return
-
-    // update captured preview
-    if (capturedImageUrl.value) URL.revokeObjectURL(capturedImageUrl.value)
-    capturedImageUrl.value = frame.url
-
-    health.value = 'loading'
-    try {
-        // announce sending and start hold music
-        const sendingMsg = '已傳送，等待回應中'
-        liveMessage.value = sendingMsg
-        speakText(sendingMsg)
-        // start hold music (may require prior user gesture to unlock AudioContext)
-        await startHoldMusic()
-
-        const data = await analyze(action, text, frame.blob)
-        health.value = 'ok'
-        console.log('analyze result', data)
-        // stop hold music and announce result for accessibility
-        stopHoldMusic()
-        const spoken = typeof data?.result === 'string' ? data.result : JSON.stringify(data.result)
-        liveMessage.value = spoken
-        try {
-          const ttsData = await synthesizeTTS(spoken)
-          if (ttsData.audio_url) {
-            playAudioFromBackend(ttsData.audio_url)
-          } else {
-            speakText(spoken)
-          }
-        } catch (e) {
-          speakText(spoken)
-        }
-      
-} catch (e) {
-      console.error('analyze failed', e)
-      health.value = 'error'
-        // stop hold music and announce error
-        stopHoldMusic()
-        const errMsg = '伺服器回應失敗'
-        liveMessage.value = errMsg
-        speakText(errMsg)
-    }
-  } catch (e) {
-    console.error('takePhotoAndSend failed', e)
-  }
-}
-
-onMounted(() => {
-  // Prepare TTS voices
-  if ('speechSynthesis' in window) {
-    try {
-      pickZhVoice()
-      window.speechSynthesis.onvoiceschanged = () => pickZhVoice()
-    } catch {}
-  }
-  // Auto-start continuous speech recognition loop
-  if (recognitionSupported.value) {
-    shouldKeepRecognizing = true
-    try {
-      recognition.start()
-    } catch (e) {
-      setTimeout(() => {
-        try { recognition.start() } catch {}
-      }, 200)
-    }
-  }
-
-  // Check microphone permission state
-  checkMicPermission()
-  // Check camera permission state
-  checkCameraPermission()
-  // Best-effort: try to infer permissions by checking labeled devices (works after first grant)
-  setTimeout(() => { refreshPermissionsFromDevices() }, 300)
-})
-
-onBeforeUnmount(() => {
-  stopCamera()
-  cleanupPermissionWatchers()
-})
-
-function toggleRecognition() {
-  if (!recognitionSupported.value) return
-  if (micPermission.value === 'denied') {
-    alert('麥克風權限被拒絕，請至瀏覽器設定開啟麥克風權限')
+// Upload logic per the three scenarios
+async function processAfterRecording(transcript: string) {
+  if (!transcript || transcript.trim().length === 0) {
+    console.log('無錄音文字，跳過上傳')
     return
   }
-  if (recognizing.value) {
-    // user requested stop
-    shouldKeepRecognizing = false
-    
-    // Clean up debounce timer and flush pending text
-    if (debounceTimer) {
-      clearTimeout(debounceTimer)
-      debounceTimer = null
+
+  // Decide scenario
+  let system_instruction = ''
+  let photoToSend: Blob | null = null
+
+  if (lastSwipeDirection.value === 'up') {
+    // scenario 1: detailed precise answer + high res
+    system_instruction = '請詳細且精準地回答以下內容，提供具體步驟與完整說明。'
+    if (lastPhotoCache.value) {
+      photoToSend = await downscaleDataUrl(lastPhotoCache.value.dataUrl, 1920)
     }
-    if (pendingFinalText.trim()) {
-      subtitles.value.push(pendingFinalText.trim())
-      pendingFinalText = ''
+  } else if (lastSwipeDirection.value === 'down') {
+    // scenario 2: short fast answer + lower res
+    system_instruction = '請簡短快速地回答，重點即可。'
+    if (lastPhotoCache.value) {
+      photoToSend = await downscaleDataUrl(lastPhotoCache.value.dataUrl, 640)
     }
-    
-    recognition.stop()
   } else {
-    // user requested start; enable keep-alive behavior
-    shouldKeepRecognizing = true
-    try {
-      recognition.start()
-    } catch (e) {
-      console.warn('recognition start error', e)
-      // sometimes recognition needs a tiny delay before starting
-      setTimeout(() => {
-        try { recognition.start() } catch (e) { console.warn('second start failed', e) }
-      }, 200)
+    // no swipe before recording
+    if (lastPhotoCache.value && !lastPhotoUploaded.value) {
+      // attach previous photo but use scenario 2 behavior
+      system_instruction = '請簡短快速地回答，重點即可。'
+      photoToSend = await downscaleDataUrl(lastPhotoCache.value.dataUrl, 640)
+    } else {
+      // no photo ever taken or already uploaded -> only text
+      system_instruction = '請簡短快速地回答，重點即可。'
+      photoToSend = null
     }
   }
-}
 
-async function checkBackendHealth() {
-  health.value = 'loading'
+  // Build form data
   try {
-    const status = await apiCheckHealth()
-    health.value = status === 'ok' ? 'ok' : 'error'
-  } catch (e) {
-    health.value = 'error'
+    const form = new FormData()
+    form.append('transcript', transcript)
+    form.append('system_instruction', system_instruction)
+    if (photoToSend) {
+      form.append('photo', photoToSend, 'photo.jpg')
+    }
+
+    lastCommand.value = '上傳中...'
+
+    const res = await fetch('/api/process', {
+      method: 'POST',
+      body: form
+    })
+
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`API 回傳錯誤: ${res.status} ${text}`)
+    }
+
+    const data = await res.json().catch(() => null)
+    lastCommand.value = '上傳完成'
+    // mark photo as uploaded if we sent one
+    if (photoToSend && lastPhotoCache.value) {
+      lastPhotoUploaded.value = true
+    }
+    // 清理 swipe flag
+    lastSwipeDirection.value = null
+    setTimeout(() => (lastCommand.value = ''), 2000)
+    return data
+  } catch (err: any) {
+    console.error('上傳失敗:', err)
+    lastCommand.value = '上傳失敗'
+    setTimeout(() => (lastCommand.value = ''), 3000)
   }
 }
-
-// checkMicPermission, checkCameraPermission provided by composable
 </script>
-
-<template>
-  <main class="min-h-full grid grid-rows-[1fr_auto]">
-    <!-- Live region for screen readers: announce API/TTS results -->
-    <div class="sr-only" aria-live="polite">{{ liveMessage }}</div>
-    <section class="p-4 pb-2 flex items-center justify-center">
-      <!-- Countdown overlay -->
-      <div v-if="countdown !== null" class="fixed inset-0 z-50 grid place-items-center pointer-events-none">
-        <div class="bg-black/70 text-white text-6xl font-bold rounded-xl px-8 py-6">
-          {{ countdown }}
-        </div>
-      </div>
-      <div class="w-full max-w-sm">
-        <!-- Speech transcript area -->
-        <div class="mb-4">
-          <div class="w-full rounded-2xl bg-neutral-100 dark:bg-neutral-900 p-4 text-center">
-            <p class="text-sm opacity-80">語音辨識</p>
-            <p class="mt-2 text-base break-words" aria-live="polite">{{ transcript || '尚未辨識到語音' }}</p>
-            <p class="mt-2 text-xs opacity-70">
-              麥克風權限：
-              <span :class="{
-                'text-green-600': micPermission==='granted',
-                'text-red-600': micPermission==='denied',
-                'text-blue-600': micPermission==='prompt',
-              }">
-                {{ micPermission === 'unsupported' ? '未知/不支援' : micPermission === 'granted' ? '已允許' : micPermission === 'denied' ? '已拒絕' : '等待授權' }}
-              </span>
-            </p>
-            <p class="mt-1 text-xs opacity-70">
-              相機權限：
-              <span :class="{
-                'text-green-600': cameraPermission==='granted',
-                'text-red-600': cameraPermission==='denied',
-                'text-blue-600': cameraPermission==='prompt',
-              }">
-                {{ cameraPermission === 'unsupported' ? '未知/不支援' : cameraPermission === 'granted' ? '已允許' : cameraPermission === 'denied' ? '已拒絕' : '等待授權' }}
-              </span>
-            </p>
-          </div>
-        </div>
-        <div v-if="cameraActivated" class="relative">
-          <div class="aspect-[3/4] overflow-hidden rounded-2xl bg-neutral-200 dark:bg-neutral-800">
-            <video ref="videoEl" playsinline muted class="w-full h-full object-cover"></video>
-          </div>
-          <p v-if="!cameraReady && !cameraError" class="absolute inset-0 grid place-items-center text-sm opacity-80">
-            正在開啟相機…
-          </p>
-          <p v-if="cameraError" class="mt-2 text-sm text-red-600">{{ cameraError }}</p>
-        </div>
-        <div v-else class="aspect-[3/4] rounded-2xl bg-neutral-200 dark:bg-neutral-800 flex items-center justify-center text-center p-4">
-          <p class="text-sm opacity-80">語音偵測中… 說「開啟拍照模式」以啟用相機</p>
-        </div>
-
-        <template v-if="capturedImageUrl">
-          <div class="mt-3">
-            <img :src="capturedImageUrl" alt="captured" class="w-full rounded-2xl object-cover aspect-[3/4]" />
-          </div>
-          <div class="mt-3 rounded-xl border border-neutral-200/70 dark:border-neutral-700 p-3 flex items-center justify-between bg-neutral-50 dark:bg-neutral-900">
-            <div>
-              <p class="text-sm opacity-70">後端健康檢查</p>
-              <p class="text-base font-medium" :class="{
-                'text-blue-600': health==='loading',
-                'text-green-600': health==='ok',
-                'text-red-600': health==='error',
-              }">
-                {{ health === 'idle' ? '尚未檢查' : health === 'loading' ? '檢查中…' : health === 'ok' ? '連線正常' : '連線失敗' }}
-              </p>
-            </div>
-            <div class="flex items-center gap-2">
-              <button class="h-10 px-4 rounded-lg bg-neutral-100 dark:bg-neutral-800 border border-neutral-200/70 dark:border-neutral-700 active:scale-[0.98]" @click="checkBackendHealth">
-                重新檢查
-              </button>
-              <button class="h-10 px-3 rounded-lg bg-neutral-100 dark:bg-neutral-800 border border-neutral-200/70 dark:border-neutral-700 active:scale-[0.98]" @click="backToCapture">
-                清除截圖
-              </button>
-            </div>
-          </div>
-        </template>
-      </div>
-    </section>
-
-    <nav class="sticky bottom-0 p-4 grid grid-cols-3 gap-3">
-      <!-- Large microphone button for accessibility -->
-      <button
-        class="col-span-3 h-20 rounded-full bg-red-600 text-white text-2xl shadow-md active:scale-[0.98] flex items-center justify-center"
-        :aria-pressed="recognizing"
-        :aria-label="recognitionSupported ? (recognizing ? '停止語音辨識' : '啟動語音辨識') : '語音辨識不支援'"
-        :disabled="!recognitionSupported"
-        @click="toggleRecognition"
-      >
-        <span v-if="!recognitionSupported">🎤 不支援</span>
-        <span v-else>
-          <span v-if="recognizing">停&nbsp;止</span>
-          <span v-else>開始偵測</span>
-        </span>
-      </button>
-
-      <!-- One-time TTS unlock for mobile browsers -->
-      <button
-        v-if="!ttsReady"
-        class="col-span-3 mt-2 h-12 rounded-lg bg-neutral-100 dark:bg-neutral-800 border border-neutral-200/70 dark:border-neutral-700 text-base active:scale-[0.98]"
-        aria-label="啟用語音輸出"
-        @click="onTtsUnlockClick"
-      >
-        啟用語音輸出（若手機沒有說話請先點我）
-      </button>
-
-      <!-- Live region for screen readers (visually hidden) -->
-      <div class="sr-only" aria-live="polite">{{ recognizing ? '麥克風已開啟' : '麥克風已關閉' }}</div>
-
-      <!-- Subtitle sliding window (overlay at bottom) -->
-      <div aria-hidden="false" class="col-span-3 pointer-events-none">
-        <div class="subtitle-window fixed left-1/2 transform -translate-x-1/2 bottom-36 w-full max-w-2xl px-4">
-          <div class="space-y-2">
-            <div v-for="(s, idx) in subtitles.slice(-5)" :key="idx" class="subtitle-item">
-              {{ s }}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <button
-        v-if="cameraActivated"
-        class="col-span-3 h-14 rounded-full bg-blue-600 text-white text-lg shadow-md active:scale-[0.98] disabled:opacity-60"
-        aria-label="拍照"
-        :disabled="!cameraReady || !!cameraError"
-        @click="takePhoto"
-      >
-        拍照
-      </button>
-    </nav>
-    <audio ref="audioRef" :src="audioUrl" style="display:none" />
-  </main>
-  
-</template>
-
-<style scoped>
-.subtitle-window {
-  display: flex;
-  justify-content: center;
-  align-items: flex-end;
-  z-index: 60;
-}
-.subtitle-window .space-y-2 {
-  display: flex;
-  flex-direction: column-reverse;
-  gap: 0.5rem;
-  align-items: center;
-}
-.subtitle-item {
-  background: rgba(0,0,0,0.75);
-  color: white;
-  padding: 0.5rem 1rem;
-  border-radius: 0.5rem;
-  font-size: 1.125rem;
-  line-height: 1.2;
-  max-width: 90%;
-  text-align: center;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.3);
-  pointer-events: none;
-  animation: slideInUp 360ms cubic-bezier(.22,.9,.31,1) both;
-}
-
-@keyframes slideInUp {
-  from {
-    opacity: 0;
-    transform: translateY(12px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-</style>
