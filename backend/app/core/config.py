@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     google_project_id: str = ""
     google_access_token: str = ""
     
+    # Logging settings
+    log_level: str = "INFO"
+    log_format: str = "json"  # json, text
+    log_file: str = "logs/app.log"
+    log_max_bytes: int = 10485760  # 10MB
+    log_backup_count: int = 5
+    
     class Config:
         env_file = ".env"
         extra = "allow"  # 允許額外的環境變數
