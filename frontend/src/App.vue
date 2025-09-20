@@ -141,14 +141,15 @@ import { useSpeechToText, type SpeechRecognitionResult } from './services/speech
 import { useCamera, type PhotoCaptureResult } from './services/cameraService'
 import { useVoiceCommand } from './services/voiceCommandService'
 import { useAuth, type User } from './services/authService'
+import { useAPI, type GeminiAnalyzeRequest } from './services/useAPI'
 
 // 登入狀態
 const auth = useAuth()
 const isLoggedIn = ref(false)
 const currentUser = ref<User | null>(null)
 
-// API base from Vite env (set VITE_API_BASE in .env)
-const API_BASE = (import.meta as any).env?.VITE_API_BASE || ''
+// API 服務
+const api = useAPI()
 
 const isRecording = ref(false)
 const mediaRecorder = ref<MediaRecorder | null>(null)
@@ -492,7 +493,7 @@ function playBeep() {
 }
 
 // Auto open camera, capture photo and play beep for swipe events, then go back to main view
-async function autoCaptureForSwipe(direction: string) {
+async function autoCaptureForSwipe(_direction: string) {
   try {
     error.value = ''
     cameraMode.value = true
@@ -634,33 +635,29 @@ async function processAfterRecording(transcript: string) {
     }
   }
 
-  // Build form data and call backend /gemini/analyze-and-speak
+  // 使用 API 服務調用 Gemini 分析
   try {
     processState.value = 'preparing'
-    const form = new FormData()
-    // backend analyze-and-speak expects 'text' field (we use transcript)
-    form.append('text', transcript)
-    form.append('system_instruction', system_instruction)
-    if (photoToSend) {
-      form.append('image', photoToSend, 'photo.jpg')
+    
+    const request: GeminiAnalyzeRequest = {
+      text: transcript,
+      system_instruction,
+      image: photoToSend || undefined
     }
 
     lastCommand.value = '上傳並合成語音中...'
     processState.value = 'uploading'
     requestSent.value = true
 
-    const res = await fetch(`${API_BASE}/gemini/analyze-and-speak`, {
-      method: 'POST',
-      body: form
-    })
+    const response = await api.analyzeAndSpeak(request)
 
-    if (!res.ok) {
-      const text = await res.text()
-      throw new Error(`API 回傳錯誤: ${res.status} ${text}`)
+    if (!response.success) {
+      throw new Error(response.error || 'API 調用失敗')
     }
 
     // We expect audio/wav stream
     processState.value = 'waiting'
+    const res = response.data!
     const contentType = res.headers.get('content-type') || ''
     console.debug('Response Content-Type:', contentType)
 
