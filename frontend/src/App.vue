@@ -1,7 +1,12 @@
 <template>
   <div class="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center">
-    <!-- 相機模式 -->
-    <div v-if="cameraMode" class="w-full min-h-screen flex flex-col">
+    <!-- 登入頁面 -->
+    <LoginView v-if="!isLoggedIn" @login-success="handleLoginSuccess" />
+    
+    <!-- 主應用程式 -->
+    <div v-else class="w-full min-h-screen">
+      <!-- 相機模式 -->
+      <div v-if="cameraMode" class="w-full min-h-screen flex flex-col">
       <!-- 相機預覽區域 -->
       <div class="flex flex-col items-center justify-center bg-black py-8">
         <div class="relative w-full max-w-2xl mx-auto">
@@ -52,8 +57,8 @@
       </div>
     </div>
 
-    <!-- 錄音模式 -->
-    <div v-else class="text-center max-w-2xl mx-auto px-4">
+      <!-- 錄音模式 -->
+      <div v-else class="text-center max-w-2xl mx-auto px-4">
       <!-- 錄音按鈕：支援 tap/hold/swipe -->
       <ActionButton
         class="w-48 h-48 rounded-full transition-all duration-300 transform hover:scale-105 active:scale-95 focus:outline-none focus:ring-4 focus:ring-opacity-50 flex items-center justify-center"
@@ -125,18 +130,26 @@
       </div>
       
     </div>
-  </div>
+    </div>  </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onUnmounted, nextTick } from 'vue'
 import ActionButton from './components/ActionButton.vue'
+import LoginView from './views/LoginView.vue'
 import { useSpeechToText, type SpeechRecognitionResult } from './services/speechToText'
 import { useCamera, type PhotoCaptureResult } from './services/cameraService'
-import { useVoiceCommand, type CommandMatch } from './services/voiceCommandService'
+import { useVoiceCommand } from './services/voiceCommandService'
+import { useAuth, type User } from './services/authService'
+import { useAPI, type GeminiAnalyzeRequest } from './services/useAPI'
 
-// API base from Vite env (set VITE_API_BASE in .env)
-const API_BASE = (import.meta as any).env?.VITE_API_BASE || ''
+// 登入狀態
+const auth = useAuth()
+const isLoggedIn = ref(false)
+const currentUser = ref<User | null>(null)
+
+// API 服務
+const api = useAPI()
 
 const isRecording = ref(false)
 const mediaRecorder = ref<MediaRecorder | null>(null)
@@ -176,6 +189,23 @@ const formatTime = (seconds: number): string => {
   const mins = Math.floor(seconds / 60)
   const secs = seconds % 60
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+}
+
+// 處理登入成功
+const handleLoginSuccess = (user: User) => {
+  currentUser.value = user
+  isLoggedIn.value = true
+}
+
+// 初始化登入狀態
+const initializeAuth = () => {
+  if (auth.isLoggedIn()) {
+    const user = auth.getCurrentUser()
+    if (user) {
+      currentUser.value = user
+      isLoggedIn.value = true
+    }
+  }
 }
 
 // 初始化語音轉文字
@@ -463,7 +493,7 @@ function playBeep() {
 }
 
 // Auto open camera, capture photo and play beep for swipe events, then go back to main view
-async function autoCaptureForSwipe(direction: string) {
+async function autoCaptureForSwipe(_direction: string) {
   try {
     error.value = ''
     cameraMode.value = true
@@ -529,6 +559,7 @@ async function autoCaptureForSwipe(direction: string) {
 
 
 // 初始化
+initializeAuth()
 initializeSpeechToText()
 
 // 清理資源
@@ -604,33 +635,29 @@ async function processAfterRecording(transcript: string) {
     }
   }
 
-  // Build form data and call backend /gemini/analyze-and-speak
+  // 使用 API 服務調用 Gemini 分析
   try {
     processState.value = 'preparing'
-    const form = new FormData()
-    // backend analyze-and-speak expects 'text' field (we use transcript)
-    form.append('text', transcript)
-    form.append('system_instruction', system_instruction)
-    if (photoToSend) {
-      form.append('image', photoToSend, 'photo.jpg')
+    
+    const request: GeminiAnalyzeRequest = {
+      text: transcript,
+      system_instruction,
+      image: photoToSend || undefined
     }
 
     lastCommand.value = '上傳並合成語音中...'
     processState.value = 'uploading'
     requestSent.value = true
 
-    const res = await fetch(`${API_BASE}/gemini/analyze-and-speak`, {
-      method: 'POST',
-      body: form
-    })
+    const response = await api.analyzeAndSpeak(request)
 
-    if (!res.ok) {
-      const text = await res.text()
-      throw new Error(`API 回傳錯誤: ${res.status} ${text}`)
+    if (!response.success) {
+      throw new Error(response.error || 'API 調用失敗')
     }
 
     // We expect audio/wav stream
     processState.value = 'waiting'
+    const res = response.data!
     const contentType = res.headers.get('content-type') || ''
     console.debug('Response Content-Type:', contentType)
 
