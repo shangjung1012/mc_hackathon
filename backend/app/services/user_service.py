@@ -43,8 +43,7 @@ class UserService:
         logger.info("Creating new user", username=user.username)
         try:
             db_user = User(
-                username=user.username,
-                is_active=user.is_active
+                username=user.username
             )
             self.db.add(db_user)
             self.db.commit()
