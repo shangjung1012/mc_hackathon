@@ -311,10 +311,10 @@ onMounted(() => {
     return
   }
   
-  // 如果是移動設備，顯示使用指引
-  if (isMobileDevice()) {
-    showMobileGuidance.value = true
-  }
+  // 如果是移動設備，顯示使用指引 - 已關閉
+  // if (isMobileDevice()) {
+  //   showMobileGuidance.value = true
+  // }
   
   // 初始化語音識別
   const success = initializeSpeechRecognition()

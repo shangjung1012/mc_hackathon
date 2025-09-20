@@ -21,15 +21,15 @@
           <p>請說：「開始使用」</p>
         </div>
         
-        <!-- 臨時調試按鈕 -->
-        <div class="mt-4">
-          <button 
-            @click="testVoiceCommand" 
-            class="px-4 py-2 bg-yellow-500 text-white rounded text-sm hover:bg-yellow-600"
-          >
-            🐛 測試語音指令
-          </button>
-        </div>
+        <!-- 臨時調試按鈕 - 透明全螢幕覆蓋 -->
+        <button 
+          @click="testVoiceCommand" 
+          class="fixed inset-0 w-full h-full bg-transparent border-0 cursor-pointer z-50"
+          style="background: transparent; border: none; outline: none;"
+        >
+          <!-- 隱藏文字，但保持可點擊區域 -->
+          <span class="sr-only">測試語音指令</span>
+        </button>
       </div>
 
       <!-- 登入/註冊選擇 -->
