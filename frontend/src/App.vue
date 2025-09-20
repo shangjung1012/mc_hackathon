@@ -54,23 +54,24 @@
 
     <!-- 錄音模式 -->
     <div v-else class="text-center max-w-2xl mx-auto px-4">
-      <!-- 錄音按鈕 -->
-      <button
-        @click="toggleRecording"
-        :class="[
-          'w-48 h-48 rounded-full transition-all duration-300 transform hover:scale-105 active:scale-95 focus:outline-none focus:ring-4 focus:ring-opacity-50',
-          isRecording 
-            ? 'bg-red-500 hover:bg-red-600 focus:ring-red-300 shadow-lg shadow-red-200' 
-            : 'bg-blue-500 hover:bg-blue-600 focus:ring-blue-300 shadow-lg shadow-blue-200'
-        ]"
+      <!-- 錄音按鈕：支援 tap/hold/swipe -->
+      <ActionButton
+        class="w-48 h-48 rounded-full transition-all duration-300 transform hover:scale-105 active:scale-95 focus:outline-none focus:ring-4 focus:ring-opacity-50 flex items-center justify-center"
+        :holdDuration="600"
+        :swipeThreshold="40"
+        @tap="onActionTap"
+        @hold="onActionHold"
+        @swipe="onActionSwipe"
+        :aria-label="isRecording ? '停止錄音' : '開始錄音'"
       >
-        <div class="flex items-center justify-center h-full">
-          <!-- 未錄音時顯示三角形（播放圖標） -->
+        <div :class="[
+          'flex items-center justify-center h-full w-full rounded-full',
+          isRecording ? 'bg-red-500 hover:bg-red-600 focus:ring-red-300 shadow-lg shadow-red-200' : 'bg-blue-500 hover:bg-blue-600 focus:ring-blue-300 shadow-lg shadow-blue-200'
+        ]">
           <div v-if="!isRecording" class="w-0 h-0 border-l-[24px] border-l-white border-t-[18px] border-t-transparent border-b-[18px] border-b-transparent ml-2"></div>
-          <!-- 錄音時顯示正方形（停止圖標） -->
           <div v-else class="w-8 h-8 bg-white rounded-sm"></div>
         </div>
-      </button>
+      </ActionButton>
       
       <!-- 狀態文字 -->
       <p v-if="isRecording" class="mt-6 text-lg font-medium text-gray-700 dark:text-gray-300">
@@ -116,6 +117,7 @@
 
 <script setup lang="ts">
 import { ref, onUnmounted, nextTick } from 'vue'
+import ActionButton from './components/ActionButton.vue'
 import { useSpeechToText, type SpeechRecognitionResult } from './services/speechToText'
 import { useCamera, type PhotoCaptureResult } from './services/cameraService'
 import { useVoiceCommand, type CommandMatch } from './services/voiceCommandService'
@@ -125,6 +127,10 @@ const mediaRecorder = ref<MediaRecorder | null>(null)
 const recordingTime = ref(0)
 const error = ref('')
 const recordingInterval = ref<number | null>(null)
+const sessionTranscript = ref('')
+const lastSwipeDirection = ref<string | null>(null) // 'up' | 'down' | null
+const lastPhotoCache = ref<PhotoCaptureResult | null>(null)
+const lastPhotoUploaded = ref(false)
 
 // 語音轉文字相關狀態
 const speechToText = useSpeechToText()
@@ -157,12 +163,15 @@ const initializeSpeechToText = () => {
   if (speechRecognitionSupported.value) {
     speechToText.setCallbacks({
       onResult: (result: SpeechRecognitionResult) => {
-        if (result.isFinal) {
-          transcriptText.value += result.transcript + ' '
-          interimText.value = ''
+      if (result.isFinal) {
+        transcriptText.value += result.transcript + ' '
+        interimText.value = ''
           
-          // 處理語音指令
-          handleVoiceCommand(result.transcript)
+        // 累積本次錄音 session 的 transcript
+        sessionTranscript.value += result.transcript + ' '
+
+        // 處理語音指令
+        handleVoiceCommand(result.transcript)
         } else {
           interimText.value = result.transcript
         }
@@ -241,6 +250,8 @@ const stopRecording = () => {
       clearInterval(recordingInterval.value)
       recordingInterval.value = null
     }
+    // 錄音停止後處理：將 sessionTranscript 與照片上傳
+    void processAfterRecording(sessionTranscript.value)
   }
 }
 
@@ -249,8 +260,45 @@ const toggleRecording = () => {
   if (isRecording.value) {
     stopRecording()
   } else {
+    // 開始新的 session transcript
+    sessionTranscript.value = ''
     startRecording()
   }
+}
+
+// ActionButton 事件處理
+const onActionTap = () => {
+  toggleRecording()
+}
+
+const onActionHold = () => {
+  // 長按可以進入相機模式作示範
+  enterCameraMode()
+}
+
+const onActionSwipe = (direction: string) => {
+  lastCommand.value = `swipe: ${direction}`
+  // 根據方向執行不同動作
+  switch (direction) {
+    case 'up':
+      // 顯示範例動作：拍照（需在相機模式下）
+      if (cameraMode.value) takePhoto()
+      break
+    case 'down':
+      // 關閉相機模式
+      if (cameraMode.value) exitCameraMode()
+      break
+    case 'left':
+      // 範例：顯示上一張（暫未實作）
+      lastCommand.value = '向左滑 — previous (未實作)'
+      break
+    case 'right':
+      // 範例：顯示下一張（暫未實作）
+      lastCommand.value = '向右滑 — next (未實作)'
+      break
+  }
+
+  setTimeout(() => (lastCommand.value = ''), 2000)
 }
 
 // 處理語音指令
@@ -326,10 +374,12 @@ const takePhoto = async () => {
     const photo = await camera.capturePhoto()
     if (photo) {
       console.log('拍照成功:', photo)
-      
-      // 保存最新照片
+
+      // 保存最新照片並快取（尚未上傳）
       latestPhoto.value = photo
-      
+      lastPhotoCache.value = photo
+      lastPhotoUploaded.value = false
+
       // 顯示拍照成功提示
       lastCommand.value = '拍照成功！'
       setTimeout(() => {
@@ -356,4 +406,100 @@ onUnmounted(() => {
   camera.destroy()
   voiceCommand.destroy()
 })
+
+// helper: downscale dataUrl to maxWidth (preserves aspect ratio). returns Blob
+function downscaleDataUrl(dataUrl: string, maxWidth: number): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => {
+      const ratio = img.width > maxWidth ? maxWidth / img.width : 1
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.round(img.width * ratio)
+      canvas.height = Math.round(img.height * ratio)
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return reject(new Error('無法取得 canvas context'))
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob)
+        else reject(new Error('toBlob 失敗'))
+      }, 'image/jpeg', 0.8)
+    }
+    img.onerror = (e) => reject(e)
+    img.src = dataUrl
+  })
+}
+
+// Upload logic per the three scenarios
+async function processAfterRecording(transcript: string) {
+  if (!transcript || transcript.trim().length === 0) {
+    console.log('無錄音文字，跳過上傳')
+    return
+  }
+
+  // Decide scenario
+  let system_instruction = ''
+  let photoToSend: Blob | null = null
+
+  if (lastSwipeDirection.value === 'up') {
+    // scenario 1: detailed precise answer + high res
+    system_instruction = '請詳細且精準地回答以下內容，提供具體步驟與完整說明。'
+    if (lastPhotoCache.value) {
+      photoToSend = await downscaleDataUrl(lastPhotoCache.value.dataUrl, 1920)
+    }
+  } else if (lastSwipeDirection.value === 'down') {
+    // scenario 2: short fast answer + lower res
+    system_instruction = '請簡短快速地回答，重點即可。'
+    if (lastPhotoCache.value) {
+      photoToSend = await downscaleDataUrl(lastPhotoCache.value.dataUrl, 640)
+    }
+  } else {
+    // no swipe before recording
+    if (lastPhotoCache.value && !lastPhotoUploaded.value) {
+      // attach previous photo but use scenario 2 behavior
+      system_instruction = '請簡短快速地回答，重點即可。'
+      photoToSend = await downscaleDataUrl(lastPhotoCache.value.dataUrl, 640)
+    } else {
+      // no photo ever taken or already uploaded -> only text
+      system_instruction = '請簡短快速地回答，重點即可。'
+      photoToSend = null
+    }
+  }
+
+  // Build form data
+  try {
+    const form = new FormData()
+    form.append('transcript', transcript)
+    form.append('system_instruction', system_instruction)
+    if (photoToSend) {
+      form.append('photo', photoToSend, 'photo.jpg')
+    }
+
+    lastCommand.value = '上傳中...'
+
+    const res = await fetch('/api/process', {
+      method: 'POST',
+      body: form
+    })
+
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`API 回傳錯誤: ${res.status} ${text}`)
+    }
+
+    const data = await res.json().catch(() => null)
+    lastCommand.value = '上傳完成'
+    // mark photo as uploaded if we sent one
+    if (photoToSend && lastPhotoCache.value) {
+      lastPhotoUploaded.value = true
+    }
+    // 清理 swipe flag
+    lastSwipeDirection.value = null
+    setTimeout(() => (lastCommand.value = ''), 2000)
+    return data
+  } catch (err: any) {
+    console.error('上傳失敗:', err)
+    lastCommand.value = '上傳失敗'
+    setTimeout(() => (lastCommand.value = ''), 3000)
+  }
+}
 </script>
