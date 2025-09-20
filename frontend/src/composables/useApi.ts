@@ -23,7 +23,7 @@ export function useApi() {
       return 'error'
     }
   }
-  async function synthesizeTTS(text: string, language_code = 'cmn-CN', voice_name = 'cmn-CN-Standard-A') {
+  async function synthesizeTTS(text: string, language_code = 'cmn-CN', voice_name = 'cmn-CN-Chirp3-HD-Achernar') {
     const apiUrl = resolveApiUrl('/tts/synthesize')
     const res = await fetch(apiUrl, {
       method: 'POST',
