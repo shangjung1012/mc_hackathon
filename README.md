@@ -1,4 +1,4 @@
-# MC Hackathon – Smart Shelf MVP
+# VoiceVision – Smart Shelf MVP
 
 快速上手指南：前端使用 Vue + Vite + TypeScript + TailwindCSS；後端使用 FastAPI（以 uv 啟動）。支援手機瀏覽器（Android Chrome）測試。
 
