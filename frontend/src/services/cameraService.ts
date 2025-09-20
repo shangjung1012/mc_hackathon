@@ -60,7 +60,7 @@ export class CameraService {
   /**
    * 拍照
    */
-  public capturePhoto(): PhotoCaptureResult | null {
+  public async capturePhoto(): Promise<PhotoCaptureResult | null> {
     if (!this.videoElement || !this.isActive) {
       return null
     }
@@ -97,7 +97,7 @@ export class CameraService {
           resolve(null)
         }
       }, 'image/jpeg', 0.8)
-    }) as Promise<PhotoCaptureResult>
+    })
   }
 
   /**
