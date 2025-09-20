@@ -36,6 +36,17 @@
     <p v-if="error" class="mt-4 text-red-500 text-sm text-center max-w-xs">
       {{ error }}
     </p>
+
+    <!-- 移動設備權限指引 -->
+    <div v-if="showMobileGuidance" class="mt-4 p-3 bg-blue-50 dark:bg-blue-900 rounded-lg text-sm text-blue-800 dark:text-blue-200">
+      <p class="font-medium mb-2">📱 移動設備使用指引：</p>
+      <ul class="text-left space-y-1">
+        <li>• 確保使用 HTTPS 訪問（安全連接）</li>
+        <li>• 點擊錄音按鈕後允許麥克風權限</li>
+        <li>• 如被拒絕，請到瀏覽器設定中允許麥克風</li>
+        <li>• 建議使用 Chrome 或 Safari 瀏覽器</li>
+      </ul>
+    </div>
   </div>
 </template>
 
@@ -67,6 +78,7 @@ const error = ref('')
 const recordingInterval = ref<number | null>(null)
 const speechRecognition = ref<any>(null)
 const isListening = ref(false)
+const showMobileGuidance = ref(false)
 
 // 格式化時間顯示
 const formatTime = (seconds: number): string => {
@@ -82,69 +94,115 @@ const initializeSpeechRecognition = () => {
     return false
   }
 
-  const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-  speechRecognition.value = new SpeechRecognition()
-  
-  speechRecognition.value.lang = 'zh-TW'
-  speechRecognition.value.continuous = true
-  speechRecognition.value.interimResults = true
-  speechRecognition.value.maxAlternatives = 1
+  try {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    speechRecognition.value = new SpeechRecognition()
+    
+    speechRecognition.value.lang = 'zh-TW'
+    speechRecognition.value.continuous = true
+    speechRecognition.value.interimResults = true
+    speechRecognition.value.maxAlternatives = 1
 
-  speechRecognition.value.onstart = () => {
-    isListening.value = true
-  }
-
-  speechRecognition.value.onresult = (event: any) => {
-    const result = event.results[event.resultIndex]
-    const transcript = result[0].transcript
-    const isFinal = result.isFinal
-
-    if (isFinal) {
-      emit('transcript', transcript)
-    }
-  }
-
-  speechRecognition.value.onerror = (event: any) => {
-    isListening.value = false
-    let errorMessage = '語音識別發生錯誤'
-
-    switch (event.error) {
-      case 'no-speech':
-        errorMessage = '沒有檢測到語音，請重試'
-        break
-      case 'audio-capture':
-        errorMessage = '無法訪問麥克風'
-        break
-      case 'not-allowed':
-        errorMessage = '麥克風權限被拒絕'
-        break
-      case 'network':
-        errorMessage = '網路連線錯誤'
-        break
-      default:
-        errorMessage = `語音識別錯誤: ${event.error}`
+    speechRecognition.value.onstart = () => {
+      console.log('🎤 語音識別開始')
+      isListening.value = true
     }
 
-    error.value = errorMessage
-    emit('error', errorMessage)
-  }
+    speechRecognition.value.onresult = (event: any) => {
+      const result = event.results[event.resultIndex]
+      const transcript = result[0].transcript
+      const isFinal = result.isFinal
 
-  speechRecognition.value.onend = () => {
-    isListening.value = false
-  }
+      console.log('🎤 VoiceRecordingButton 語音識別結果:', { transcript, isFinal })
 
-  return true
+      if (isFinal) {
+        console.log('✅ 發送最終轉文字結果:', transcript)
+        emit('transcript', transcript)
+      }
+    }
+
+    speechRecognition.value.onerror = (event: any) => {
+      isListening.value = false
+      let errorMessage = '語音識別發生錯誤'
+
+      switch (event.error) {
+        case 'no-speech':
+          errorMessage = '沒有檢測到語音，請重試'
+          break
+        case 'audio-capture':
+          errorMessage = '無法訪問麥克風'
+          break
+        case 'not-allowed':
+          errorMessage = '麥克風權限被拒絕'
+          break
+        case 'network':
+          errorMessage = '網路連線錯誤'
+          break
+        case 'service-not-allowed':
+          errorMessage = '語音服務不可用'
+          break
+        case 'bad-grammar':
+          errorMessage = '語法錯誤'
+          break
+        default:
+          errorMessage = `語音識別錯誤: ${event.error}`
+      }
+
+      error.value = errorMessage
+      emit('error', errorMessage)
+    }
+
+    speechRecognition.value.onend = () => {
+      console.log('🎤 語音識別結束')
+      isListening.value = false
+    }
+
+    speechRecognition.value.onnomatch = () => {
+      // 可以選擇是否顯示無匹配訊息
+    }
+
+    return true
+  } catch (err) {
+    console.error('語音識別初始化失敗:', err)
+    error.value = '語音識別初始化失敗'
+    emit('error', error.value)
+    return false
+  }
 }
 
 // 開始錄音
 const startRecording = async () => {
   try {
     error.value = ''
+    
+    // Try Permissions API first to give clearer guidance on mobile
+    try {
+      const perms = (navigator as any).permissions
+      if (perms && perms.query) {
+        try {
+          const status = await perms.query({ name: 'microphone' } as any)
+          if (status.state === 'denied') {
+            error.value = '麥克風權限已被拒絕，請到瀏覽器設定允許本網站使用麥克風'
+            emit('error', error.value)
+            console.warn('Microphone permission denied')
+            return
+          }
+          // if 'prompt' or 'granted', continue to request getUserMedia
+        } catch (e) {
+          // Permissions API may not support 'microphone' on some browsers; ignore
+          console.debug('Permissions API microphone query not available or failed', e)
+        }
+      }
+    } catch (e) {
+      console.debug('Permissions API not available', e)
+    }
+
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
     
     mediaRecorder.value = new MediaRecorder(stream)
     
     mediaRecorder.value.onstop = () => {
+      // 停止所有音軌
       stream.getTracks().forEach(track => track.stop())
     }
     
@@ -154,7 +212,19 @@ const startRecording = async () => {
     
     // 開始語音識別
     if (speechRecognition.value) {
-      speechRecognition.value.start()
+      // 確保語音識別實例正確初始化
+      try {
+        speechRecognition.value.start()
+      } catch (error) {
+        console.warn('語音識別啟動失敗，嘗試重新初始化:', error)
+        // 如果啟動失敗，重新初始化並重試
+        initializeSpeechRecognition()
+        setTimeout(() => {
+          if (speechRecognition.value) {
+            speechRecognition.value.start()
+          }
+        }, 100)
+      }
     }
     
     // 開始計時
@@ -165,8 +235,23 @@ const startRecording = async () => {
     emit('recordingStart')
     props.onRecordingStart?.()
     
+    // 成功開始錄音後隱藏移動設備指引
+    if (showMobileGuidance.value) {
+      showMobileGuidance.value = false
+    }
+    
   } catch (err) {
-    error.value = '無法訪問麥克風，請檢查權限設定'
+    // Provide more actionable messages for mobile Chrome
+    const msg = (err && (err as any).name) ? (err as any).name : String(err)
+    if (msg === 'NotAllowedError' || msg === 'SecurityError') {
+      error.value = '麥克風權限被拒絕：請在瀏覽器或系統設定中允許麥克風使用（需 HTTPS）'
+    } else if (msg === 'NotFoundError' || msg === 'OverconstrainedError') {
+      error.value = '未找到麥克風裝置，請確認裝置有可用的麥克風'
+    } else if (msg === 'NotReadableError') {
+      error.value = '無法讀取麥克風，請確認其他應用程式未占用麥克風'
+    } else {
+      error.value = '無法訪問麥克風，請檢查權限設定與瀏覽器設定'
+    }
     emit('error', error.value)
     console.error('錄音錯誤:', err)
   }
@@ -212,8 +297,30 @@ const cleanup = () => {
   }
 }
 
+// 檢測是否為移動設備
+const isMobileDevice = () => {
+  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+         (navigator.maxTouchPoints && navigator.maxTouchPoints > 2)
+}
+
 onMounted(() => {
-  initializeSpeechRecognition()
+  // 檢查是否在 HTTPS 環境下（移動設備需要）
+  if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+    error.value = '語音功能需要 HTTPS 環境，請使用 HTTPS 訪問'
+    emit('error', error.value)
+    return
+  }
+  
+  // 如果是移動設備，顯示使用指引
+  if (isMobileDevice()) {
+    showMobileGuidance.value = true
+  }
+  
+  // 初始化語音識別
+  const success = initializeSpeechRecognition()
+  if (!success) {
+    console.warn('語音識別初始化失敗')
+  }
 })
 
 onUnmounted(() => {

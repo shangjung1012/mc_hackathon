@@ -20,6 +20,16 @@
         <div class="text-sm text-gray-500 dark:text-gray-400">
           <p>請說：「開始使用」</p>
         </div>
+        
+        <!-- 臨時調試按鈕 -->
+        <div class="mt-4">
+          <button 
+            @click="testVoiceCommand" 
+            class="px-4 py-2 bg-yellow-500 text-white rounded text-sm hover:bg-yellow-600"
+          >
+            🐛 測試語音指令
+          </button>
+        </div>
       </div>
 
       <!-- 登入/註冊選擇 -->
@@ -153,22 +163,31 @@ let countdownInterval: number | null = null
 
 // 處理首頁語音輸入
 const handleWelcomeTranscript = async (transcript: string) => {
-  if (isProcessing.value) return
+  console.log('🎤 收到語音轉文字:', transcript)
+  
+  if (isProcessing.value) {
+    console.log('⏳ 正在處理中，忽略此次輸入')
+    return
+  }
   
   isProcessing.value = true
   error.value = ''
   
   const normalizedTranscript = transcript.trim().toLowerCase()
+  console.log('📝 標準化後的文字:', normalizedTranscript)
   
   try {
     if (normalizedTranscript.includes('開始') || normalizedTranscript.includes('使用') || normalizedTranscript.includes('開始使用')) {
+      console.log('✅ 匹配到「開始使用」指令')
       await speak('歡迎使用語音助手服務')
       startLoginProcess()
     } else {
+      console.log('❌ 未匹配到「開始使用」指令')
       error.value = '請說「開始使用」'
       await speak('請說開始使用')
     }
   } catch (err) {
+    console.error('❌ 語音處理錯誤:', err)
     error.value = '語音識別錯誤，請重試'
     await speak('語音識別錯誤，請重試')
   } finally {
@@ -178,7 +197,9 @@ const handleWelcomeTranscript = async (transcript: string) => {
 
 // 開始登入流程
 const startLoginProcess = async () => {
+  console.log('🚀 開始登入流程，切換到 auth-choice 步驟')
   currentStep.value = 'auth-choice'
+  console.log('📱 當前步驟:', currentStep.value)
   await speak('請說出您要的操作，登入或註冊')
 }
 
@@ -318,6 +339,12 @@ const speak = async (text: string) => {
   }
 }
 
+// 測試語音指令（臨時調試功能）
+const testVoiceCommand = () => {
+  console.log('🧪 測試語音指令觸發')
+  handleWelcomeTranscript('開始使用')
+}
+
 // 清理資源
 const cleanup = () => {
   if (countdownInterval) {
@@ -329,7 +356,7 @@ const cleanup = () => {
 onMounted(async () => {
   // 檢查是否已經登入
   if (auth.isLoggedIn()) {
-    const user = auth.getCurrentUser()
+    const user = await auth.getCurrentUser()
     if (user) {
       currentUser.value = user
       currentStep.value = 'login-success'
