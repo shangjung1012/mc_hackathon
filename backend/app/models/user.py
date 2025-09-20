@@ -28,5 +28,6 @@ class User(Base):
     age = Column(Integer, nullable=True)
     vision_level = Column(Enum(VisionLevelEnum), nullable=True)
     chronic_diseases = Column(ARRAY(String), nullable=True)  # 慢性病列表
+    others = Column(String, nullable=True)  # 其他資訊
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

@@ -25,6 +25,7 @@ class UserBase(BaseModel):
     age: Optional[int] = None
     vision_level: Optional[VisionLevelEnum] = None
     chronic_diseases: Optional[List[str]] = None
+    others: Optional[str] = None
 
 
 class UserCreate(UserBase):
@@ -37,6 +38,7 @@ class UserUpdate(BaseModel):
     age: Optional[int] = None
     vision_level: Optional[VisionLevelEnum] = None
     chronic_diseases: Optional[List[str]] = None
+    others: Optional[str] = None
 
 
 class UserInDB(UserBase):
