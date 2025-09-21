@@ -114,13 +114,11 @@ async def analyze(
 
         # 根據模型類型設置配置
         # 優先使用呼叫方傳入的 system_instruction，否則使用包含使用者資料的 SYSTEM_PROMPT
-        if system_instruction:
-            final_system_instruction = system_instruction
-        else:
-            final_system_instruction = get_system_prompt_with_user(current_user)
+        system_instruction = get_system_prompt_with_user(current_user)
+        print(system_instruction)
         
         config_params = {
-            "system_instruction": final_system_instruction,
+            "system_instruction": system_instruction,
             "response_mime_type": "application/json",
             "response_schema": SpeechResponse,
         }

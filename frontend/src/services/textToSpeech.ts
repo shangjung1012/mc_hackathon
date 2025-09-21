@@ -71,6 +71,24 @@ export class TextToSpeechService {
   }
 
   /**
+   * 檢查是否可以播放語音（處理瀏覽器自動播放限制）
+   */
+  public canPlay(): boolean {
+    if (!this.isSupported()) {
+      return false
+    }
+    
+    // 檢查是否有用戶手勢上下文
+    try {
+      // 嘗試創建一個測試的 utterance 來檢查是否被阻止
+      new SpeechSynthesisUtterance('')
+      return true
+    } catch (error) {
+      return false
+    }
+  }
+
+  /**
    * 播放語音
    */
   public speak(text: string, options?: Partial<TTSOptions>): Promise<void> {
@@ -119,13 +137,32 @@ export class TextToSpeechService {
 
       utterance.onerror = (event) => {
         this.isSpeaking = false
-        const error = `語音播放錯誤: ${event.error}`
-        this.callbacks.onError?.(error)
-        reject(new Error(error))
+        let errorMessage = `語音播放錯誤: ${event.error}`
+        
+        // 處理特定的錯誤類型
+        if (event.error === 'not-allowed') {
+          errorMessage = '語音播放被瀏覽器阻止，請點擊頁面後再試'
+        } else if (event.error === 'interrupted') {
+          errorMessage = '語音播放被中斷'
+        } else if (event.error === 'audio-busy') {
+          errorMessage = '音訊設備忙碌中，請稍後再試'
+        } else if (event.error === 'audio-hardware') {
+          errorMessage = '音訊硬體錯誤'
+        }
+        
+        this.callbacks.onError?.(errorMessage)
+        reject(new Error(errorMessage))
       }
 
       // 開始播放
-      speechSynthesis.speak(utterance)
+      try {
+        speechSynthesis.speak(utterance)
+      } catch (error) {
+        this.isSpeaking = false
+        const errorMessage = `語音播放失敗: ${error instanceof Error ? error.message : String(error)}`
+        this.callbacks.onError?.(errorMessage)
+        reject(new Error(errorMessage))
+      }
     })
   }
 

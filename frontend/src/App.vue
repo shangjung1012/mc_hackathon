@@ -156,6 +156,19 @@
         <div class="mt-2 text-xs text-gray-500">最近狀態訊息: {{ lastCommand }}</div>
       </div>
       
+      <!-- 音訊播放按鈕 -->
+      <div v-if="processState === 'ready-to-play' && audioElement" class="mt-4 flex justify-center">
+        <button 
+          @click="playAudio"
+          class="px-6 py-3 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center space-x-2"
+        >
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" />
+          </svg>
+          <span>播放回應音訊</span>
+        </button>
+      </div>
+      
     </div>
     </div>  </div>
 </template>
@@ -191,6 +204,8 @@ const processState = ref<string>('idle') // 'idle'|'deciding'|'preparing'|'uploa
 const requestSent = ref(false)
 const responseReceived = ref(false)
 const responseError = ref<string | null>(null)
+const audioElement = ref<HTMLAudioElement | null>(null)
+const audioUrl = ref<string | null>(null)
 
 const hasCachedPhoto = () => !!lastPhotoCache.value
 
@@ -571,6 +586,25 @@ function playBeep() {
   }
 }
 
+// Play audio with user interaction
+const playAudio = async () => {
+  if (!audioElement.value) {
+    console.error('No audio element available')
+    return
+  }
+
+  try {
+    processState.value = 'playing'
+    await audioElement.value.play()
+    processState.value = 'done'
+    console.log('音訊播放完成')
+  } catch (error) {
+    console.error('音訊播放失敗:', error)
+    processState.value = 'error'
+    responseError.value = `播放失敗: ${String(error)}`
+  }
+}
+
 // Auto open camera, capture photo and play beep for swipe events, then go back to main view
 async function autoCaptureForSwipe(_direction: string) {
   try {
@@ -649,6 +683,11 @@ onUnmounted(() => {
   speechToText.destroy()
   camera.destroy()
   voiceCommand.destroy()
+  
+  // Clean up audio resources
+  if (audioUrl.value) {
+    URL.revokeObjectURL(audioUrl.value)
+  }
 })
 
 // helper: downscale dataUrl to maxWidth (preserves aspect ratio). returns Blob
@@ -754,7 +793,7 @@ async function processAfterRecording(transcript: string) {
     console.debug('Received blob:', { size: blob.size, type: blob.type })
     processState.value = 'playing'
 
-    // play audio automatically with robust error handling
+    // Store audio for user-triggered playback
     try {
       const url = URL.createObjectURL(blob)
       const audio = new Audio()
@@ -762,39 +801,17 @@ async function processAfterRecording(transcript: string) {
       audio.crossOrigin = 'anonymous'
       audio.preload = 'auto'
 
-      // handle load success
-      const playPromise = new Promise<void>((resolve, reject) => {
-        const cleanup = () => {
-          audio.oncanplaythrough = null
-          audio.onerror = null
-        }
-        audio.oncanplaythrough = () => {
-          cleanup()
-          audio.play().then(() => resolve()).catch((e) => {
-            console.warn('audio.play() rejected', e)
-            reject(e)
-          })
-        }
-        audio.onerror = (ev) => {
-          cleanup()
-          const err = (ev && (ev as any).error) ? (ev as any).error : 'Unknown audio load error'
-          console.error('Audio failed to load', err)
-          reject(err)
-        }
-        // start loading
-        try { audio.load() } catch (e) { /* ignore */ }
-      })
-
-      await playPromise.catch((e) => {
-        console.warn('自動播放或載入失敗', e)
-        throw e
-      })
-
-      processState.value = 'done'
+      // Store audio element for user interaction
+      audioElement.value = audio
+      audioUrl.value = url
+      processState.value = 'ready-to-play'
+      
+      // Show play button instead of auto-playing
+      console.log('音訊已準備就緒，等待用戶點擊播放')
     } catch (e) {
-      console.error('播放音檔失敗', e)
+      console.error('音訊載入失敗', e)
       processState.value = 'error'
-      responseError.value = `播放失敗: ${String(e)}`
+      responseError.value = `音訊載入失敗: ${String(e)}`
     }
 
   lastCommand.value = '完成'
