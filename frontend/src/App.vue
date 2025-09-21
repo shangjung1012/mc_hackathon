@@ -231,6 +231,36 @@ const latestPhoto = ref<PhotoCaptureResult | null>(null)
 // 語音指令相關狀態
 const voiceCommand = useVoiceCommand()
 
+// 等待函式
+const wait = (ms: number) => {
+  return new Promise((r) => setTimeout(r, ms))
+}
+
+// 安全停止語音識別，等待 onend 避免競態
+const stopListeningSafely = async (): Promise<void> => {
+  try {
+    speechToText.stopListening()
+    // 簡單等待 200ms，讓 onend 有時間觸發
+    await wait(200)
+  } catch {}
+}
+
+// 清理音訊資源
+const cleanupAudio = () => {
+  try {
+    if (audioElement.value) {
+      audioElement.value.pause()
+      audioElement.value.src = ''
+      audioElement.value.load?.()
+      audioElement.value = null
+    }
+    if (audioUrl.value) {
+      URL.revokeObjectURL(audioUrl.value)
+      audioUrl.value = null
+    }
+  } catch {}
+}
+
 // 格式化時間顯示
 const formatTime = (seconds: number): string => {
   const mins = Math.floor(seconds / 60)
@@ -266,10 +296,10 @@ const handleLogout = () => {
   
   // 停止所有正在進行的操作
   if (isRecording.value) {
-    stopRecording()
+    void stopRecording()
   }
   if (cameraMode.value) {
-    exitCameraMode()
+    void exitCameraMode()
   }
   if (isListening.value) {
     speechToText.stopListening()
@@ -348,6 +378,19 @@ const initializeSpeechToText = () => {
 const startRecording = async () => {
   try {
     error.value = ''
+
+    // **先清掉上一輪音訊資源，避免卡住播放或聲音裝置**
+    cleanupAudio()
+
+    // **保守一點：每次真正錄音前都 reinitialize recognition**
+    if (speechRecognitionSupported.value) {
+      try {
+        speechToText.reinitialize()
+        await wait(50)
+      } catch (e) {
+        console.debug('reinitialize STT failed (ignorable)', e)
+      }
+    }
     
     // 重置顯示文字，每次錄音都重新開始
     transcriptText.value = ''
@@ -425,33 +468,44 @@ const startRecording = async () => {
 }
 
 // 停止錄音
-const stopRecording = () => {
+const stopRecording = async () => {
   if (mediaRecorder.value && isRecording.value) {
     mediaRecorder.value.stop()
     isRecording.value = false
-    
-    // 停止語音識別
+
+    // 先停 STT，但要**等待 onend**，並把最後的 interim 補進去
     if (speechRecognitionSupported.value) {
-      speechToText.stopListening()
+      try {
+        // 如果還沒有最終結果，就用 interim 當作最後結果避免空字串
+        const interim = (interimText.value || '').trim()
+        await stopListeningSafely() // ← 關鍵：等 onend，避免下一次 start 競態
+        if (!sessionTranscript.value.trim() && interim.length > 0) {
+          sessionTranscript.value = interim + ' '
+          transcriptText.value = interim
+          interimText.value = ''
+        }
+      } catch {}
     }
     
     if (recordingInterval.value) {
       clearInterval(recordingInterval.value)
       recordingInterval.value = null
     }
-    // 錄音停止後處理：將 sessionTranscript 與照片上傳
-    void processAfterRecording(sessionTranscript.value)
+
+    // **一定要在這裡再取一次乾淨的 transcript**
+    const finalText = (sessionTranscript.value || transcriptText.value || '').trim()
+    void processAfterRecording(finalText)
   }
 }
 
 // 切換錄音狀態
 const toggleRecording = () => {
   if (isRecording.value) {
-    stopRecording()
+    void stopRecording()
   } else {
     // 開始新的 session transcript
     sessionTranscript.value = ''
-    startRecording()
+    void startRecording()
   }
 }
 
@@ -527,10 +581,10 @@ const enterCameraMode = async () => {
       await camera.initialize(videoElement.value)
     }
     
-    // 開始語音識別
-    if (speechRecognitionSupported.value) {
-      speechToText.startListening()
-    }
+    // 建議：相機模式先不要自動開 STT，避免與主錄音流程打架
+    // if (speechRecognitionSupported.value && !isRecording.value && !isListening.value) {
+    //   speechToText.startListening()
+    // }
   } catch (err) {
     error.value = '無法啟動相機模式'
     console.error('相機模式啟動失敗:', err)
@@ -539,13 +593,13 @@ const enterCameraMode = async () => {
 }
 
 // 退出相機模式
-const exitCameraMode = () => {
+const exitCameraMode = async () => {
   cameraMode.value = false
   camera.stop()
   
-  // 停止語音識別
-  if (speechRecognitionSupported.value) {
-    speechToText.stopListening()
+  // 停止語音識別，但同樣等一下
+  if (speechRecognitionSupported.value && isListening.value) {
+    await stopListeningSafely()
   }
   
   // 清除照片預覽
@@ -614,6 +668,8 @@ const playAudio = async () => {
     console.error('音訊播放失敗:', error)
     processState.value = 'error'
     responseError.value = `播放失敗: ${String(error)}`
+    // 若使用者更換輸出裝置或 iOS 自動暫停，建議釋放並提示重新取得
+    cleanupAudio()
   }
 }
 
@@ -746,7 +802,10 @@ function downscaleDataUrl(dataUrl: string, maxWidth: number): Promise<Blob> {
 
 // Upload logic per the three scenarios
 async function processAfterRecording(transcript: string) {
-  if (!transcript || transcript.trim().length === 0) {
+  let text = (transcript || '').trim()
+  if (!text && interimText.value.trim()) text = interimText.value.trim()
+
+  if (!text) {
     console.log('無錄音文字，跳過上傳')
     return
   }
@@ -801,7 +860,7 @@ async function processAfterRecording(transcript: string) {
     processState.value = 'preparing'
     
     const request: GeminiAnalyzeRequest = {
-      text: transcript,
+      text,
       system_instruction,
       image: photoToSend || undefined
     }
