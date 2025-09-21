@@ -664,6 +664,11 @@ const playAudio = async () => {
     await audioElement.value.play()
     processState.value = 'done'
     console.log('音訊播放完成')
+    
+    // 播放完成後自動變回 idle 狀態
+    setTimeout(() => {
+      processState.value = 'idle'
+    }, 1000)
   } catch (error) {
     console.error('音訊播放失敗:', error)
     processState.value = 'error'
@@ -684,6 +689,11 @@ const speakWithWebAPI = async (text: string): Promise<void> => {
     
     console.log('Web Speech API 朗讀完成')
     processState.value = 'done'
+    
+    // 朗讀完成後自動變回 idle 狀態
+    setTimeout(() => {
+      processState.value = 'idle'
+    }, 1000)
   } catch (error) {
     console.error('Web Speech API 朗讀失敗:', error)
     processState.value = 'error'
@@ -899,6 +909,11 @@ async function processAfterRecording(transcript: string) {
           processState.value = 'done'
           lastCommand.value = '使用備用語音合成完成'
           setTimeout(() => (lastCommand.value = ''), 2000)
+          
+          // 語音合成完成後自動變回 idle 狀態
+          setTimeout(() => {
+            processState.value = 'idle'
+          }, 1000)
           return
         }
       } catch (parseError) {
