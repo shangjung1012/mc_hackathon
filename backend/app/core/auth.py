@@ -60,3 +60,47 @@ def get_current_user_optional(
         return get_current_user(credentials, db)
     except HTTPException:
         return None
+    except Exception:
+        # 處理其他可能的異常，如沒有提供認證標頭
+        return None
+
+def get_current_user_optional_no_dependency(
+    db: Session = Depends(get_db)
+):
+    """
+    可選的用戶認證，不依賴 HTTPBearer，手動檢查 Authorization 標頭
+    """
+    from fastapi import Request
+    from fastapi import Header
+    
+    async def _get_user(request: Request):
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return None
+        
+        token = auth_header.split(" ")[1]
+        try:
+            # 解碼 JWT token
+            payload = jwt.decode(
+                token, 
+                settings.secret_key, 
+                algorithms=[settings.algorithm]
+            )
+            username: str = payload.get("sub")
+            if username is None:
+                return None
+        except JWTError:
+            logger.warning("JWT token validation failed in optional auth")
+            return None
+        
+        # 從資料庫獲取用戶信息
+        user_service = UserService(db)
+        user = user_service.get_user_by_username(username)
+        if user is None:
+            logger.warning("User not found in database", username=username)
+            return None
+        
+        logger.debug("User authenticated successfully in optional auth", username=username, user_id=user.id)
+        return user
+    
+    return _get_user

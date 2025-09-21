@@ -211,6 +211,9 @@ export class ApiService {
 
       const response = await fetch(`${this.baseUrl}/gemini/analyze-and-speak`, {
         method: 'POST',
+        headers: {
+          ...this.getAuthHeaders(),
+        },
         body: form,
       })
 

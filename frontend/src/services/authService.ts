@@ -51,7 +51,8 @@ export class AuthService {
         return response.data
       }
       return null
-    } catch {
+    } catch (error) {
+      console.error('獲取使用者資料失敗:', error)
       return null
     }
   }

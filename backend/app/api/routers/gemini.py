@@ -1,17 +1,58 @@
 from typing import Optional
 import os, requests, io
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Depends, Request
 from fastapi.responses import StreamingResponse
 from google import genai
 from google.genai import types
 from app.schemas.intents import SpeechResponse
 from app.core.logging import get_logger
-from .system_prompt import SYSTEM_PROMPT
+from app.core.auth import get_current_user_optional
+from app.models.user import User
+from app.core.database import get_db
+from app.services.user_service import UserService
+from .system_prompt import SYSTEM_PROMPT, get_system_prompt_with_user
 from .tts import synthesize_speech
 
 logger = get_logger("api.gemini")
 
 router = APIRouter(prefix="/gemini", tags=["gemini"])
+
+
+def get_current_user_from_request(request: Request, db) -> Optional[User]:
+    """
+    從請求中獲取當前使用者，如果沒有認證則返回 None
+    """
+    try:
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return None
+        
+        token = auth_header.split(" ")[1]
+        from jose import JWTError, jwt
+        from app.core.config import settings
+        
+        # 解碼 JWT token
+        payload = jwt.decode(
+            token, 
+            settings.secret_key, 
+            algorithms=[settings.algorithm]
+        )
+        username: str = payload.get("sub")
+        if username is None:
+            return None
+        
+        # 從資料庫獲取用戶信息
+        user_service = UserService(db)
+        user = user_service.get_user_by_username(username)
+        if user is None:
+            logger.warning("User not found in database", username=username)
+            return None
+        
+        logger.debug("User authenticated successfully", username=username, user_id=user.id)
+        return user
+    except Exception as e:
+        logger.debug("Failed to get user from request", error=str(e))
+        return None
 
 
 def _client() -> genai.Client:
@@ -35,16 +76,22 @@ def _read_upload_bytes(upload: UploadFile) -> tuple[bytes, str]:
 
 @router.post("/analyze")
 async def analyze(
+    request: Request,
     image: Optional[UploadFile] = File(default=None),
     text: Optional[str] = Form(default=None),
     system_instruction: Optional[str] = Form(default=None),
     model: str = Form(default="gemini-2.5-flash-lite"),
+    db = Depends(get_db),
 ):
     """Accepts an image or webpage URL with optional text, then calls Gemini."""
+    # 獲取當前使用者
+    current_user = get_current_user_from_request(request, db)
+    
     logger.debug("Gemini analysis request", 
                 has_image=image is not None, 
                 has_text=text is not None, 
-                model=model)
+                model=model,
+                has_user=current_user is not None)
     
     # Require at least one of image or text. URL is optional and additive.
     if not image and not text:
@@ -66,9 +113,14 @@ async def analyze(
             logger.debug("Text added for analysis", text_length=len(text))
 
         # 根據模型類型設置配置
-        # 優先使用呼叫方傳入的 system_instruction，否則回退至預設 SYSTEM_PROMPT
+        # 優先使用呼叫方傳入的 system_instruction，否則使用包含使用者資料的 SYSTEM_PROMPT
+        if system_instruction:
+            final_system_instruction = system_instruction
+        else:
+            final_system_instruction = get_system_prompt_with_user(current_user)
+        
         config_params = {
-            "system_instruction": system_instruction or SYSTEM_PROMPT,
+            "system_instruction": final_system_instruction,
             "response_mime_type": "application/json",
             "response_schema": SpeechResponse,
         }
@@ -115,28 +167,34 @@ async def analyze(
 
 @router.post("/analyze-and-speak")
 async def analyze_and_speak(
+    request: Request,
     image: Optional[UploadFile] = File(default=None),
     text: Optional[str] = Form(default=None),
     system_instruction: Optional[str] = Form(default=None),
     model: str = Form(default="gemini-2.5-flash-lite"),
     language_code: str = Form(default="cmn-CN"),
     voice_name: str = Form(default="cmn-CN-Chirp3-HD-Achernar"),
+    db = Depends(get_db),
 ):
     """
     Analyze image/text with Gemini and return audio response.
     Combines Gemini analysis with TTS synthesis.
     """
+    # 獲取當前使用者
+    current_user = get_current_user_from_request(request, db)
+    
     logger.debug("Gemini analyze-and-speak request", 
                 has_image=image is not None, 
                 has_text=text is not None, 
                 has_system_instruction=system_instruction is not None,
                 model=model,
                 language_code=language_code,
-                voice_name=voice_name)
+                voice_name=voice_name,
+                has_user=current_user is not None)
     
     try:
-        # 直接調用 analyze 函數獲取文本結果，並傳遞 system_instruction
-        analysis_result = await analyze(image, text, system_instruction, model)
+        # 直接調用 analyze 函數獲取文本結果，並傳遞 system_instruction 和 current_user
+        analysis_result = await analyze(request, image, text, system_instruction, model, db)
         speech_text = analysis_result["result"]
         
         if not speech_text:

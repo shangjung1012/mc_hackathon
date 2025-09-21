@@ -5,6 +5,33 @@
     
     <!-- 主應用程式 -->
     <div v-else class="w-full min-h-screen">
+      <!-- 使用者資訊欄 -->
+      <div class="bg-white dark:bg-gray-900 shadow-sm border-b border-gray-200 dark:border-gray-700 px-4 py-3">
+        <div class="max-w-7xl mx-auto flex justify-between items-center">
+          <div class="flex items-center space-x-3">
+            <div class="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center">
+              <span class="text-white font-medium text-sm">
+                {{ currentUser?.username?.charAt(0).toUpperCase() || 'U' }}
+              </span>
+            </div>
+            <div>
+              <p class="text-sm font-medium text-gray-900 dark:text-gray-100">
+                {{ currentUser?.username || '使用者' }}
+              </p>
+              <p class="text-xs text-gray-500 dark:text-gray-400">
+                視覺助理
+              </p>
+            </div>
+          </div>
+          <button
+            @click="handleLogout"
+            class="px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md transition-colors"
+          >
+            登出
+          </button>
+        </div>
+      </div>
+      
       <!-- 相機模式 -->
       <div v-if="cameraMode" class="w-full min-h-screen flex flex-col">
       <!-- 相機預覽區域 -->
@@ -197,13 +224,65 @@ const handleLoginSuccess = (user: User) => {
   isLoggedIn.value = true
 }
 
+// 處理登出
+const handleLogout = () => {
+  auth.logout()
+  currentUser.value = null
+  isLoggedIn.value = false
+  
+  // 清理所有狀態
+  transcriptText.value = ''
+  interimText.value = ''
+  sessionTranscript.value = ''
+  lastCommand.value = ''
+  latestPhoto.value = null
+  lastPhotoCache.value = null
+  lastPhotoUploaded.value = false
+  processState.value = 'idle'
+  requestSent.value = false
+  responseReceived.value = false
+  responseError.value = null
+  lastSwipeDirection.value = null
+  
+  // 停止所有正在進行的操作
+  if (isRecording.value) {
+    stopRecording()
+  }
+  if (cameraMode.value) {
+    exitCameraMode()
+  }
+  if (isListening.value) {
+    speechToText.stopListening()
+  }
+}
+
 // 初始化登入狀態
-const initializeAuth = () => {
+const initializeAuth = async () => {
   if (auth.isLoggedIn()) {
-    const user = auth.getCurrentUser()
-    if (user) {
-      currentUser.value = user
+    // 先嘗試從本地緩存獲取使用者資料
+    const cachedUser = auth.getCachedUser()
+    if (cachedUser) {
+      currentUser.value = cachedUser
       isLoggedIn.value = true
+    }
+    
+    // 然後嘗試從 API 獲取最新資料
+    try {
+      const user = await auth.getCurrentUser()
+      if (user) {
+        currentUser.value = user
+        isLoggedIn.value = true
+      } else if (!cachedUser) {
+        // 如果沒有緩存且無法從 API 獲取，清除登入狀態
+        auth.logout()
+        isLoggedIn.value = false
+      }
+    } catch (error) {
+      console.error('初始化登入狀態失敗:', error)
+      if (!cachedUser) {
+        auth.logout()
+        isLoggedIn.value = false
+      }
     }
   }
 }
@@ -559,7 +638,7 @@ async function autoCaptureForSwipe(_direction: string) {
 
 
 // 初始化
-initializeAuth()
+void initializeAuth()
 initializeSpeechToText()
 
 // 清理資源

@@ -10,8 +10,9 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173",
         "https://localhost:5173",
         "https://127.0.0.1:5173",
-        "https://172.18.14.139:5173",
-        "http://172.18.14.139:5173"
+        "https://192.168.1.33:64539",
+        "*",
+        "https://192.168.0.40:5173"
     ]
     
     # Database settings
