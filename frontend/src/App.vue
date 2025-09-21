@@ -1,7 +1,39 @@
 <template>
   <div class="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center">
-    <!-- 相機模式 -->
-    <div v-if="cameraMode" class="w-full min-h-screen flex flex-col">
+    <!-- 登入頁面 -->
+    <LoginView v-if="!isLoggedIn" @login-success="handleLoginSuccess" />
+    
+    <!-- 主應用程式 -->
+    <div v-else class="w-full min-h-screen">
+      <!-- 使用者資訊欄 -->
+      <div class="bg-white dark:bg-gray-900 shadow-sm border-b border-gray-200 dark:border-gray-700 px-4 py-3">
+        <div class="max-w-7xl mx-auto flex justify-between items-center">
+          <div class="flex items-center space-x-3">
+            <div class="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center">
+              <span class="text-white font-medium text-sm">
+                {{ currentUser?.username?.charAt(0).toUpperCase() || 'U' }}
+              </span>
+            </div>
+            <div>
+              <p class="text-sm font-medium text-gray-900 dark:text-gray-100">
+                {{ currentUser?.username || '使用者' }}
+              </p>
+              <p class="text-xs text-gray-500 dark:text-gray-400">
+                視覺助理
+              </p>
+            </div>
+          </div>
+          <button
+            @click="handleLogout"
+            class="px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md transition-colors"
+          >
+            登出
+          </button>
+        </div>
+      </div>
+      
+      <!-- 相機模式 -->
+      <div v-if="cameraMode" class="w-full min-h-screen flex flex-col">
       <!-- 相機預覽區域 -->
       <div class="flex flex-col items-center justify-center bg-black py-8">
         <div class="relative w-full max-w-2xl mx-auto">
@@ -52,8 +84,8 @@
       </div>
     </div>
 
-    <!-- 錄音模式 -->
-    <div v-else class="text-center max-w-2xl mx-auto px-4">
+      <!-- 錄音模式 -->
+      <div v-else class="text-center max-w-2xl mx-auto px-4">
       <!-- 錄音按鈕：支援 tap/hold/swipe -->
       <ActionButton
         class="w-48 h-48 rounded-full transition-all duration-300 transform hover:scale-105 active:scale-95 focus:outline-none focus:ring-4 focus:ring-opacity-50 flex items-center justify-center"
@@ -111,16 +143,53 @@
         </p>
       </div>
       
+      <!-- 處理狀態面板 -->
+      <div class="mt-4 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg text-left text-sm text-gray-700 dark:text-gray-300">
+        <div class="font-medium mb-2">處理狀態</div>
+  <div>流程階段: <strong>{{ processState }}</strong></div>
+  <div>最後一次 swipe: <strong>{{ lastSwipeDirection || 'none' }}</strong></div>
+  <div>是否有快取照片: <strong>{{ hasCachedPhoto() ? '是' : '否' }}</strong></div>
+        <div>照片是否已標記為上傳: <strong>{{ lastPhotoUploaded ? '是' : '否' }}</strong></div>
+        <div>請求是否已發送: <strong>{{ requestSent ? '是' : '否' }}</strong></div>
+        <div>是否收到回覆: <strong>{{ responseReceived ? '是' : '否' }}</strong></div>
+        <div v-if="responseError" class="text-red-500">錯誤: {{ responseError }}</div>
+        <div class="mt-2 text-xs text-gray-500">最近狀態訊息: {{ lastCommand }}</div>
+      </div>
+      
+      <!-- 音訊播放按鈕 -->
+      <div v-if="processState === 'ready-to-play' && audioElement" class="mt-4 flex justify-center">
+        <button 
+          @click="playAudio"
+          class="px-6 py-3 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center space-x-2"
+        >
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" />
+          </svg>
+          <span>播放回應音訊</span>
+        </button>
+      </div>
+      
     </div>
-  </div>
+    </div>  </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onUnmounted, nextTick } from 'vue'
 import ActionButton from './components/ActionButton.vue'
+import LoginView from './views/LoginView.vue'
 import { useSpeechToText, type SpeechRecognitionResult } from './services/speechToText'
 import { useCamera, type PhotoCaptureResult } from './services/cameraService'
-import { useVoiceCommand, type CommandMatch } from './services/voiceCommandService'
+import { useVoiceCommand } from './services/voiceCommandService'
+import { useAuth, type User } from './services/authService'
+import { useAPI, type GeminiAnalyzeRequest } from './services/useAPI'
+
+// 登入狀態
+const auth = useAuth()
+const isLoggedIn = ref(false)
+const currentUser = ref<User | null>(null)
+
+// API 服務
+const api = useAPI()
 
 const isRecording = ref(false)
 const mediaRecorder = ref<MediaRecorder | null>(null)
@@ -131,6 +200,14 @@ const sessionTranscript = ref('')
 const lastSwipeDirection = ref<string | null>(null) // 'up' | 'down' | null
 const lastPhotoCache = ref<PhotoCaptureResult | null>(null)
 const lastPhotoUploaded = ref(false)
+const processState = ref<string>('idle') // 'idle'|'deciding'|'preparing'|'uploading'|'waiting'|'playing'|'done'|'error'
+const requestSent = ref(false)
+const responseReceived = ref(false)
+const responseError = ref<string | null>(null)
+const audioElement = ref<HTMLAudioElement | null>(null)
+const audioUrl = ref<string | null>(null)
+
+const hasCachedPhoto = () => !!lastPhotoCache.value
 
 // 語音轉文字相關狀態
 const speechToText = useSpeechToText()
@@ -154,6 +231,75 @@ const formatTime = (seconds: number): string => {
   const mins = Math.floor(seconds / 60)
   const secs = seconds % 60
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+}
+
+// 處理登入成功
+const handleLoginSuccess = (user: User) => {
+  currentUser.value = user
+  isLoggedIn.value = true
+}
+
+// 處理登出
+const handleLogout = () => {
+  auth.logout()
+  currentUser.value = null
+  isLoggedIn.value = false
+  
+  // 清理所有狀態
+  transcriptText.value = ''
+  interimText.value = ''
+  sessionTranscript.value = ''
+  lastCommand.value = ''
+  latestPhoto.value = null
+  lastPhotoCache.value = null
+  lastPhotoUploaded.value = false
+  processState.value = 'idle'
+  requestSent.value = false
+  responseReceived.value = false
+  responseError.value = null
+  lastSwipeDirection.value = null
+  
+  // 停止所有正在進行的操作
+  if (isRecording.value) {
+    stopRecording()
+  }
+  if (cameraMode.value) {
+    exitCameraMode()
+  }
+  if (isListening.value) {
+    speechToText.stopListening()
+  }
+}
+
+// 初始化登入狀態
+const initializeAuth = async () => {
+  if (auth.isLoggedIn()) {
+    // 先嘗試從本地緩存獲取使用者資料
+    const cachedUser = auth.getCachedUser()
+    if (cachedUser) {
+      currentUser.value = cachedUser
+      isLoggedIn.value = true
+    }
+    
+    // 然後嘗試從 API 獲取最新資料
+    try {
+      const user = await auth.getCurrentUser()
+      if (user) {
+        currentUser.value = user
+        isLoggedIn.value = true
+      } else if (!cachedUser) {
+        // 如果沒有緩存且無法從 API 獲取，清除登入狀態
+        auth.logout()
+        isLoggedIn.value = false
+      }
+    } catch (error) {
+      console.error('初始化登入狀態失敗:', error)
+      if (!cachedUser) {
+        auth.logout()
+        isLoggedIn.value = false
+      }
+    }
+  }
 }
 
 // 初始化語音轉文字
@@ -196,6 +342,27 @@ const initializeSpeechToText = () => {
 const startRecording = async () => {
   try {
     error.value = ''
+    // Try Permissions API first to give clearer guidance on mobile
+    try {
+      const perms = (navigator as any).permissions
+      if (perms && perms.query) {
+        try {
+          const status = await perms.query({ name: 'microphone' } as any)
+          if (status.state === 'denied') {
+            error.value = '麥克風權限已被拒絕，請到瀏覽器設定允許本網站使用麥克風'
+            console.warn('Microphone permission denied')
+            return
+          }
+          // if 'prompt' or 'granted', continue to request getUserMedia
+        } catch (e) {
+          // Permissions API may not support 'microphone' on some browsers; ignore
+          console.debug('Permissions API microphone query not available or failed', e)
+        }
+      }
+    } catch (e) {
+      console.debug('Permissions API not available', e)
+    }
+
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
     
     mediaRecorder.value = new MediaRecorder(stream)
@@ -230,7 +397,17 @@ const startRecording = async () => {
     }, 1000)
     
   } catch (err) {
-    error.value = '無法訪問麥克風，請檢查權限設定'
+    // Provide more actionable messages for mobile Chrome
+    const msg = (err && (err as any).name) ? (err as any).name : String(err)
+    if (msg === 'NotAllowedError' || msg === 'SecurityError') {
+      error.value = '麥克風權限被拒絕：請在瀏覽器或系統設定中允許麥克風使用（需 HTTPS）'
+    } else if (msg === 'NotFoundError' || msg === 'OverconstrainedError') {
+      error.value = '未找到麥克風裝置，請確認裝置有可用的麥克風'
+    } else if (msg === 'NotReadableError') {
+      error.value = '無法讀取麥克風，請確認其他應用程式未占用麥克風'
+    } else {
+      error.value = '無法訪問麥克風，請檢查權限設定與瀏覽器設定'
+    }
     console.error('錄音錯誤:', err)
   }
 }
@@ -272,28 +449,23 @@ const onActionTap = () => {
 }
 
 const onActionHold = () => {
-  // 長按可以進入相機模式作示範
-  enterCameraMode()
+  // 長按在桌面上模擬向上滑，啟動自動拍照（方便測試）
+  lastSwipeDirection.value = 'up'
+  void autoCaptureForSwipe('up')
 }
 
 const onActionSwipe = (direction: string) => {
   lastCommand.value = `swipe: ${direction}`
-  // 根據方向執行不同動作
+  // record swipe direction so subsequent recording uses correct scenario
+  lastSwipeDirection.value = direction
+  // 每次上/下/任意 swipe 都自動開啟相機拍照並回到主畫面
+  void autoCaptureForSwipe(direction)
+  // 保留左右滑示例回饋文字
   switch (direction) {
-    case 'up':
-      // 顯示範例動作：拍照（需在相機模式下）
-      if (cameraMode.value) takePhoto()
-      break
-    case 'down':
-      // 關閉相機模式
-      if (cameraMode.value) exitCameraMode()
-      break
     case 'left':
-      // 範例：顯示上一張（暫未實作）
       lastCommand.value = '向左滑 — previous (未實作)'
       break
     case 'right':
-      // 範例：顯示下一張（暫未實作）
       lastCommand.value = '向右滑 — next (未實作)'
       break
   }
@@ -392,9 +564,115 @@ const takePhoto = async () => {
   }
 }
 
+// play a short beep sound (use WebAudio or simple Audio) for feedback
+function playBeep() {
+  try {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
+    const o = ctx.createOscillator()
+    const g = ctx.createGain()
+    o.type = 'sine'
+    o.frequency.value = 880
+    g.gain.value = 0.05
+    o.connect(g)
+    g.connect(ctx.destination)
+    o.start()
+    setTimeout(() => {
+      o.stop()
+      try { ctx.close() } catch (e) {}
+    }, 150)
+  } catch (e) {
+    // fallback: use simple Audio with a small base64 beep (optional)
+    console.warn('WebAudio not available for beep', e)
+  }
+}
+
+// Play audio with user interaction
+const playAudio = async () => {
+  if (!audioElement.value) {
+    console.error('No audio element available')
+    return
+  }
+
+  try {
+    processState.value = 'playing'
+    await audioElement.value.play()
+    processState.value = 'done'
+    console.log('音訊播放完成')
+  } catch (error) {
+    console.error('音訊播放失敗:', error)
+    processState.value = 'error'
+    responseError.value = `播放失敗: ${String(error)}`
+  }
+}
+
+// Auto open camera, capture photo and play beep for swipe events, then go back to main view
+async function autoCaptureForSwipe(_direction: string) {
+  try {
+    error.value = ''
+    cameraMode.value = true
+    await nextTick()
+    if (videoElement.value) {
+      await camera.initialize(videoElement.value)
+    }
+    // wait for video to receive first frames (avoid capturing a black frame)
+    const video = videoElement.value
+    if (video) {
+      const start = Date.now()
+      const timeout = 2000 // ms
+      // If browser supports requestVideoFrameCallback use it once
+      if ((video as any).requestVideoFrameCallback) {
+        await new Promise<void>((resolve) => {
+          try {
+            ;(video as any).requestVideoFrameCallback(() => resolve())
+          } catch (e) {
+            // fallback to animation frame loop
+            const check = () => {
+              if (video.videoWidth > 0 && video.videoHeight > 0 && video.readyState >= 2) return resolve()
+              if (Date.now() - start > timeout) return resolve()
+              requestAnimationFrame(check)
+            }
+            check()
+          }
+        })
+      } else {
+        await new Promise<void>((resolve) => {
+          const check = () => {
+            if (video.videoWidth > 0 && video.videoHeight > 0 && video.readyState >= 2) return resolve()
+            if (Date.now() - start > timeout) return resolve()
+            requestAnimationFrame(check)
+          }
+          check()
+        })
+      }
+      // short stabilization delay
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    playBeep()
+    const photo = await camera.capturePhoto()
+    if (photo) {
+      latestPhoto.value = photo
+      lastPhotoCache.value = photo
+      lastPhotoUploaded.value = false
+      // 播放成功提示
+      lastCommand.value = '拍照完成，返回主畫面'
+      setTimeout(() => (lastCommand.value = ''), 1500)
+    }
+  } catch (err) {
+    console.error('auto capture failed', err)
+    error.value = '拍照失敗'
+  } finally {
+    // 確保回到主畫面
+    camera.stop()
+    cameraMode.value = false
+    // 清除 video element
+    await nextTick()
+  }
+}
+
 
 
 // 初始化
+void initializeAuth()
 initializeSpeechToText()
 
 // 清理資源
@@ -405,6 +683,11 @@ onUnmounted(() => {
   speechToText.destroy()
   camera.destroy()
   voiceCommand.destroy()
+  
+  // Clean up audio resources
+  if (audioUrl.value) {
+    URL.revokeObjectURL(audioUrl.value)
+  }
 })
 
 // helper: downscale dataUrl to maxWidth (preserves aspect ratio). returns Blob
@@ -437,6 +720,11 @@ async function processAfterRecording(transcript: string) {
   }
 
   // Decide scenario
+  processState.value = 'deciding'
+  responseError.value = null
+  responseReceived.value = false
+  requestSent.value = false
+
   let system_instruction = ''
   let photoToSend: Blob | null = null
 
@@ -454,40 +742,79 @@ async function processAfterRecording(transcript: string) {
     }
   } else {
     // no swipe before recording
-    if (lastPhotoCache.value && !lastPhotoUploaded.value) {
-      // attach previous photo but use scenario 2 behavior
+    if (lastPhotoCache.value) {
+      // attach previous photo (even if already uploaded before) but use scenario 2 behavior
       system_instruction = '請簡短快速地回答，重點即可。'
       photoToSend = await downscaleDataUrl(lastPhotoCache.value.dataUrl, 640)
     } else {
-      // no photo ever taken or already uploaded -> only text
+      // no photo ever taken -> only text
       system_instruction = '請簡短快速地回答，重點即可。'
       photoToSend = null
     }
   }
 
-  // Build form data
+  // 使用 API 服務調用 Gemini 分析
   try {
-    const form = new FormData()
-    form.append('transcript', transcript)
-    form.append('system_instruction', system_instruction)
-    if (photoToSend) {
-      form.append('photo', photoToSend, 'photo.jpg')
+    processState.value = 'preparing'
+    
+    const request: GeminiAnalyzeRequest = {
+      text: transcript,
+      system_instruction,
+      image: photoToSend || undefined
     }
 
-    lastCommand.value = '上傳中...'
+    lastCommand.value = '上傳並合成語音中...'
+    processState.value = 'uploading'
+    requestSent.value = true
 
-    const res = await fetch('/api/process', {
-      method: 'POST',
-      body: form
-    })
+    const response = await api.analyzeAndSpeak(request)
 
-    if (!res.ok) {
-      const text = await res.text()
-      throw new Error(`API 回傳錯誤: ${res.status} ${text}`)
+    if (!response.success) {
+      throw new Error(response.error || 'API 調用失敗')
     }
 
-    const data = await res.json().catch(() => null)
-    lastCommand.value = '上傳完成'
+    // We expect audio/wav stream
+    processState.value = 'waiting'
+    const res = response.data!
+    const contentType = res.headers.get('content-type') || ''
+    console.debug('Response Content-Type:', contentType)
+
+    // If backend didn't return audio, read text for diagnostics
+    if (!contentType.includes('audio')) {
+      const text = await res.text().catch(() => null)
+      console.error('Expected audio but got:', contentType, text)
+      responseError.value = `後端回傳非音訊 (content-type=${contentType})：${text ? text.substring(0,200) : '無內容'}`
+      processState.value = 'error'
+      return
+    }
+
+    const blob = await res.blob()
+    responseReceived.value = true
+    console.debug('Received blob:', { size: blob.size, type: blob.type })
+    processState.value = 'playing'
+
+    // Store audio for user-triggered playback
+    try {
+      const url = URL.createObjectURL(blob)
+      const audio = new Audio()
+      audio.src = url
+      audio.crossOrigin = 'anonymous'
+      audio.preload = 'auto'
+
+      // Store audio element for user interaction
+      audioElement.value = audio
+      audioUrl.value = url
+      processState.value = 'ready-to-play'
+      
+      // Show play button instead of auto-playing
+      console.log('音訊已準備就緒，等待用戶點擊播放')
+    } catch (e) {
+      console.error('音訊載入失敗', e)
+      processState.value = 'error'
+      responseError.value = `音訊載入失敗: ${String(e)}`
+    }
+
+  lastCommand.value = '完成'
     // mark photo as uploaded if we sent one
     if (photoToSend && lastPhotoCache.value) {
       lastPhotoUploaded.value = true
@@ -495,10 +822,12 @@ async function processAfterRecording(transcript: string) {
     // 清理 swipe flag
     lastSwipeDirection.value = null
     setTimeout(() => (lastCommand.value = ''), 2000)
-    return data
+    return { ok: true }
   } catch (err: any) {
-    console.error('上傳失敗:', err)
-    lastCommand.value = '上傳失敗'
+    console.error('上傳或合成語音失敗:', err)
+    responseError.value = String(err)
+    processState.value = 'error'
+    lastCommand.value = '上傳或合成失敗'
     setTimeout(() => (lastCommand.value = ''), 3000)
   }
 }

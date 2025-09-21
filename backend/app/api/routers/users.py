@@ -1,15 +1,122 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
-
+from datetime import datetime, timedelta, timezone
+from jose import JWTError, jwt
 from ...core.database import get_db
 from ...core.logging import get_logger
-from ...schemas.user import User, UserCreate, UserUpdate
+from ...core.config import settings
+from ...core.auth import get_current_user, get_current_user_optional
+from ...schemas.user import User, UserCreate, UserUpdate, Token
 from ...services.user_service import UserService
 
 logger = get_logger("api.users")
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+def create_access_token(data: dict, expires_delta: timedelta = None):
+    """創建 JWT token"""
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
+    return encoded_jwt
+
+
+@router.post("/register", response_model=dict)
+def register_user(username: str, db: Session = Depends(get_db)):
+    """註冊新使用者（無密碼）"""
+    logger.debug("User registration attempt", username=username)
+    
+    user_service = UserService(db)
+    
+    # 檢查使用者名稱是否已存在
+    if user_service.get_user_by_username(username):
+        logger.warning("User registration failed: username already exists", username=username)
+        raise HTTPException(
+            status_code=400,
+            detail="Username already exists"
+        )
+    
+    try:
+        # 創建用戶
+        user_data = UserCreate(username=username)
+        new_user = user_service.create_user(user_data)
+        
+        # 創建 token
+        access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
+        access_token = create_access_token(
+            data={"sub": new_user.username}, expires_delta=access_token_expires
+        )
+        
+        logger.debug("User registered successfully", user_id=new_user.id, username=new_user.username)
+        return {
+            "success": True,
+            "message": "User registered successfully",
+            "user": {
+                "id": new_user.id,
+                "username": new_user.username,
+                "gender": new_user.gender.value if new_user.gender else None,
+                "age": new_user.age,
+                "vision_level": new_user.vision_level.value if new_user.vision_level else None,
+                "chronic_diseases": new_user.chronic_diseases,
+                "others": new_user.others,
+                "created_at": new_user.created_at.isoformat(),
+                "updated_at": new_user.updated_at.isoformat() if new_user.updated_at else None
+            },
+            "token": access_token
+        }
+    except Exception as e:
+        logger.error("User registration failed", username=username, error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/login", response_model=dict)
+def login_user(username: str, db: Session = Depends(get_db)):
+    """使用者登入（無密碼）"""
+    logger.debug("User login attempt", username=username)
+    
+    user_service = UserService(db)
+    user = user_service.get_user_by_username(username)
+    
+    if not user:
+        logger.warning("User login failed: user not found", username=username)
+        raise HTTPException(
+            status_code=401,
+            detail="User not found"
+        )
+    
+    try:
+        # 創建 token
+        access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
+        access_token = create_access_token(
+            data={"sub": user.username}, expires_delta=access_token_expires
+        )
+        
+        logger.debug("User logged in successfully", user_id=user.id, username=user.username)
+        return {
+            "success": True,
+            "message": "User logged in successfully",
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "gender": user.gender.value if user.gender else None,
+                "age": user.age,
+                "vision_level": user.vision_level.value if user.vision_level else None,
+                "chronic_diseases": user.chronic_diseases,
+                "others": user.others,
+                "created_at": user.created_at.isoformat(),
+                "updated_at": user.updated_at.isoformat() if user.updated_at else None
+            },
+            "token": access_token
+        }
+    except Exception as e:
+        logger.error("User login failed", username=username, error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/", response_model=User)
@@ -34,6 +141,27 @@ def create_user(user: UserCreate, db: Session = Depends(get_db)):
     except Exception as e:
         logger.error("User creation failed", username=user.username, error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/me", response_model=dict)
+def get_current_user_info(current_user = Depends(get_current_user)):
+    """獲取當前登入用戶的詳細信息"""
+    logger.debug("Current user info requested", user_id=current_user.id, username=current_user.username)
+    
+    return {
+        "success": True,
+        "user": {
+            "id": current_user.id,
+            "username": current_user.username,
+            "gender": current_user.gender.value if current_user.gender else None,
+            "age": current_user.age,
+            "vision_level": current_user.vision_level.value if current_user.vision_level else None,
+            "chronic_diseases": current_user.chronic_diseases,
+            "others": current_user.others,
+            "created_at": current_user.created_at.isoformat(),
+            "updated_at": current_user.updated_at.isoformat() if current_user.updated_at else None
+        }
+    }
 
 
 @router.get("/", response_model=List[User])

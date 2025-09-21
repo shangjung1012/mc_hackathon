@@ -58,7 +58,7 @@ def synthesize_speech(text: str, language_code: str = "cmn-CN", voice_name: str 
     }
     
     # Retry mechanism: maximum 2 attempts (retry once after first failure)
-    max_retries = 2
+    max_retries = 3
     for attempt in range(max_retries):
         try:
             # Request headers

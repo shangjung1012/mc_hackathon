@@ -8,7 +8,11 @@ class Settings(BaseSettings):
     cors_allow_origins: list[str] = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "*"
+        "https://localhost:5173",
+        "https://127.0.0.1:5173",
+        "https://192.168.1.33:64539",
+        "*",
+        "https://192.168.0.40:5173"
     ]
     
     # Database settings
