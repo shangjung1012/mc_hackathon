@@ -57,10 +57,24 @@ def synthesize_speech(text: str, language_code: str = "cmn-CN", voice_name: str 
         }
     }
     
-    # Retry mechanism: maximum 2 attempts (retry once after first failure)
-    max_retries = 3
-    for attempt in range(max_retries):
+    # Error handling strategy:
+    # 1. First attempt: Use existing access token (if available)
+    # 2. If first attempt fails: Try gcloud auth print-access-token
+    # 3. If second attempt fails: Return error (no fallback to text)
+    
+    for attempt in range(2):
         try:
+            # If this is the second attempt, get fresh access token
+            if attempt == 1:
+                logger.info("First attempt failed, trying gcloud auth print-access-token...")
+                try:
+                    access_token = get_access_token()
+                    os.environ["GOOGLE_ACCESS_TOKEN"] = access_token
+                    logger.info("Successfully obtained new access token from gcloud")
+                except Exception as token_error:
+                    logger.error(f"Failed to get access token from gcloud: {token_error}")
+                    raise Exception(f"Failed to get access token from gcloud: {token_error}")
+            
             # Request headers
             headers = {
                 "Content-Type": "application/json",
@@ -78,26 +92,27 @@ def synthesize_speech(text: str, language_code: str = "cmn-CN", voice_name: str 
             # Decode base64 audio data
             audio_content = base64.b64decode(result["audioContent"])
             
+            logger.info(f"TTS synthesis successful on attempt {attempt + 1}")
             return audio_content
             
         except requests.exceptions.RequestException as e:
-            # If 401 error and still have retry attempts, get new access_token
-            if e.response.status_code == 401 and attempt < max_retries - 1:
-                print(f"API request failed (401), getting new access_token... (attempt {attempt + 1}/{max_retries})")
-                try:
-                    access_token = get_access_token()
-                    os.environ["GOOGLE_ACCESS_TOKEN"] = access_token
-                    print("Successfully got new access_token, retrying...")
-                    continue
-                except Exception as token_error:
-                    print(f"Failed to get new access_token: {token_error}")
-                    raise Exception(f"Failed to get new access_token: {token_error}")
+            logger.warning(f"TTS API request failed on attempt {attempt + 1}: {e}")
+            if attempt == 0:
+                # First attempt failed, will try gcloud auth on next iteration
+                continue
             else:
-                raise Exception(f"API request failed: {e}")
+                # Second attempt also failed, raise error
+                raise Exception(f"TTS API request failed after 2 attempts: {e}")
         except KeyError as e:
             raise Exception(f"Response format error, missing field: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error on attempt {attempt + 1}: {e}")
+            if attempt == 0:
+                continue
+            else:
+                raise e
     
-    # If all retry attempts failed
+    # This should never be reached due to the logic above
     raise Exception("All retry attempts failed")
 
 
