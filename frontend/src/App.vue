@@ -152,6 +152,7 @@
         <div>照片是否已標記為上傳: <strong>{{ lastPhotoUploaded ? '是' : '否' }}</strong></div>
         <div>請求是否已發送: <strong>{{ requestSent ? '是' : '否' }}</strong></div>
         <div>是否收到回覆: <strong>{{ responseReceived ? '是' : '否' }}</strong></div>
+        <div v-if="processState === 'ready-to-speak'" class="text-blue-500">使用 Web Speech API 備用方案</div>
         <div v-if="responseError" class="text-red-500">錯誤: {{ responseError }}</div>
         <div class="mt-2 text-xs text-gray-500">最近狀態訊息: {{ lastCommand }}</div>
       </div>
@@ -182,6 +183,7 @@ import { useCamera, type PhotoCaptureResult } from './services/cameraService'
 import { useVoiceCommand } from './services/voiceCommandService'
 import { useAuth, type User } from './services/authService'
 import { useAPI, type GeminiAnalyzeRequest } from './services/useAPI'
+import { useTextToSpeech } from './services/textToSpeech'
 
 // 登入狀態
 const auth = useAuth()
@@ -190,6 +192,9 @@ const currentUser = ref<User | null>(null)
 
 // API 服務
 const api = useAPI()
+
+// TTS 服務
+const tts = useTextToSpeech()
 
 const isRecording = ref(false)
 const mediaRecorder = ref<MediaRecorder | null>(null)
@@ -226,6 +231,36 @@ const latestPhoto = ref<PhotoCaptureResult | null>(null)
 // 語音指令相關狀態
 const voiceCommand = useVoiceCommand()
 
+// 等待函式
+const wait = (ms: number) => {
+  return new Promise((r) => setTimeout(r, ms))
+}
+
+// 安全停止語音識別，等待 onend 避免競態
+const stopListeningSafely = async (): Promise<void> => {
+  try {
+    speechToText.stopListening()
+    // 簡單等待 200ms，讓 onend 有時間觸發
+    await wait(200)
+  } catch {}
+}
+
+// 清理音訊資源
+const cleanupAudio = () => {
+  try {
+    if (audioElement.value) {
+      audioElement.value.pause()
+      audioElement.value.src = ''
+      audioElement.value.load?.()
+      audioElement.value = null
+    }
+    if (audioUrl.value) {
+      URL.revokeObjectURL(audioUrl.value)
+      audioUrl.value = null
+    }
+  } catch {}
+}
+
 // 格式化時間顯示
 const formatTime = (seconds: number): string => {
   const mins = Math.floor(seconds / 60)
@@ -261,10 +296,10 @@ const handleLogout = () => {
   
   // 停止所有正在進行的操作
   if (isRecording.value) {
-    stopRecording()
+    void stopRecording()
   }
   if (cameraMode.value) {
-    exitCameraMode()
+    void exitCameraMode()
   }
   if (isListening.value) {
     speechToText.stopListening()
@@ -310,10 +345,11 @@ const initializeSpeechToText = () => {
     speechToText.setCallbacks({
       onResult: (result: SpeechRecognitionResult) => {
       if (result.isFinal) {
-        transcriptText.value += result.transcript + ' '
+        // 不累加，每次錄音都重新設定顯示文字
+        transcriptText.value = result.transcript
         interimText.value = ''
           
-        // 累積本次錄音 session 的 transcript
+        // 累積本次錄音 session 的 transcript（用於後續處理）
         sessionTranscript.value += result.transcript + ' '
 
         // 處理語音指令
@@ -342,6 +378,25 @@ const initializeSpeechToText = () => {
 const startRecording = async () => {
   try {
     error.value = ''
+
+    // **先清掉上一輪音訊資源，避免卡住播放或聲音裝置**
+    cleanupAudio()
+
+    // **保守一點：每次真正錄音前都 reinitialize recognition**
+    if (speechRecognitionSupported.value) {
+      try {
+        speechToText.reinitialize()
+        await wait(50)
+      } catch (e) {
+        console.debug('reinitialize STT failed (ignorable)', e)
+      }
+    }
+    
+    // 重置顯示文字，每次錄音都重新開始
+    transcriptText.value = ''
+    interimText.value = ''
+    sessionTranscript.value = ''
+    
     // Try Permissions API first to give clearer guidance on mobile
     try {
       const perms = (navigator as any).permissions
@@ -413,33 +468,44 @@ const startRecording = async () => {
 }
 
 // 停止錄音
-const stopRecording = () => {
+const stopRecording = async () => {
   if (mediaRecorder.value && isRecording.value) {
     mediaRecorder.value.stop()
     isRecording.value = false
-    
-    // 停止語音識別
+
+    // 先停 STT，但要**等待 onend**，並把最後的 interim 補進去
     if (speechRecognitionSupported.value) {
-      speechToText.stopListening()
+      try {
+        // 如果還沒有最終結果，就用 interim 當作最後結果避免空字串
+        const interim = (interimText.value || '').trim()
+        await stopListeningSafely() // ← 關鍵：等 onend，避免下一次 start 競態
+        if (!sessionTranscript.value.trim() && interim.length > 0) {
+          sessionTranscript.value = interim + ' '
+          transcriptText.value = interim
+          interimText.value = ''
+        }
+      } catch {}
     }
     
     if (recordingInterval.value) {
       clearInterval(recordingInterval.value)
       recordingInterval.value = null
     }
-    // 錄音停止後處理：將 sessionTranscript 與照片上傳
-    void processAfterRecording(sessionTranscript.value)
+
+    // **一定要在這裡再取一次乾淨的 transcript**
+    const finalText = (sessionTranscript.value || transcriptText.value || '').trim()
+    void processAfterRecording(finalText)
   }
 }
 
 // 切換錄音狀態
 const toggleRecording = () => {
   if (isRecording.value) {
-    stopRecording()
+    void stopRecording()
   } else {
     // 開始新的 session transcript
     sessionTranscript.value = ''
-    startRecording()
+    void startRecording()
   }
 }
 
@@ -515,10 +581,10 @@ const enterCameraMode = async () => {
       await camera.initialize(videoElement.value)
     }
     
-    // 開始語音識別
-    if (speechRecognitionSupported.value) {
-      speechToText.startListening()
-    }
+    // 建議：相機模式先不要自動開 STT，避免與主錄音流程打架
+    // if (speechRecognitionSupported.value && !isRecording.value && !isListening.value) {
+    //   speechToText.startListening()
+    // }
   } catch (err) {
     error.value = '無法啟動相機模式'
     console.error('相機模式啟動失敗:', err)
@@ -527,13 +593,13 @@ const enterCameraMode = async () => {
 }
 
 // 退出相機模式
-const exitCameraMode = () => {
+const exitCameraMode = async () => {
   cameraMode.value = false
   camera.stop()
   
-  // 停止語音識別
-  if (speechRecognitionSupported.value) {
-    speechToText.stopListening()
+  // 停止語音識別，但同樣等一下
+  if (speechRecognitionSupported.value && isListening.value) {
+    await stopListeningSafely()
   }
   
   // 清除照片預覽
@@ -602,6 +668,27 @@ const playAudio = async () => {
     console.error('音訊播放失敗:', error)
     processState.value = 'error'
     responseError.value = `播放失敗: ${String(error)}`
+    // 若使用者更換輸出裝置或 iOS 自動暫停，建議釋放並提示重新取得
+    cleanupAudio()
+  }
+}
+
+// 使用 Web Speech API 朗讀文字（TTS 失敗時的備用方案）
+const speakWithWebAPI = async (text: string): Promise<void> => {
+  try {
+    console.log('使用 Web Speech API 備用方案朗讀:', text)
+    processState.value = 'playing'
+    
+    // 使用與 LoginView 相同的 TTS 服務
+    await tts.speak(text)
+    
+    console.log('Web Speech API 朗讀完成')
+    processState.value = 'done'
+  } catch (error) {
+    console.error('Web Speech API 朗讀失敗:', error)
+    processState.value = 'error'
+    responseError.value = `語音合成失敗: ${String(error)}`
+    throw error
   }
 }
 
@@ -683,6 +770,7 @@ onUnmounted(() => {
   speechToText.destroy()
   camera.destroy()
   voiceCommand.destroy()
+  tts.destroy()
   
   // Clean up audio resources
   if (audioUrl.value) {
@@ -714,9 +802,23 @@ function downscaleDataUrl(dataUrl: string, maxWidth: number): Promise<Blob> {
 
 // Upload logic per the three scenarios
 async function processAfterRecording(transcript: string) {
-  if (!transcript || transcript.trim().length === 0) {
+  let text = (transcript || '').trim()
+  if (!text && interimText.value.trim()) text = interimText.value.trim()
+
+  if (!text) {
     console.log('無錄音文字，跳過上傳')
     return
+  }
+
+  // 重新獲取使用者資訊
+  try {
+    const user = await auth.getCurrentUser()
+    if (user) {
+      currentUser.value = user
+      console.log('使用者資訊已更新:', user.username)
+    }
+  } catch (error) {
+    console.warn('重新獲取使用者資訊失敗:', error)
   }
 
   // Decide scenario
@@ -758,7 +860,7 @@ async function processAfterRecording(transcript: string) {
     processState.value = 'preparing'
     
     const request: GeminiAnalyzeRequest = {
-      text: transcript,
+      text,
       system_instruction,
       image: photoToSend || undefined
     }
@@ -783,6 +885,26 @@ async function processAfterRecording(transcript: string) {
     if (!contentType.includes('audio')) {
       const text = await res.text().catch(() => null)
       console.error('Expected audio but got:', contentType, text)
+      
+      // 嘗試解析 JSON 回應，可能是 TTS 失敗的備用方案
+      try {
+        const jsonResponse = JSON.parse(text || '{}')
+        if (jsonResponse.fallback_mode && jsonResponse.text) {
+          console.log('TTS 失敗，使用 Web Speech API 備用方案')
+          responseReceived.value = true
+          processState.value = 'ready-to-speak'
+          
+          // 使用 Web Speech API 朗讀文字
+          await speakWithWebAPI(jsonResponse.text)
+          processState.value = 'done'
+          lastCommand.value = '使用備用語音合成完成'
+          setTimeout(() => (lastCommand.value = ''), 2000)
+          return
+        }
+      } catch (parseError) {
+        console.debug('無法解析為 JSON，繼續原有錯誤處理')
+      }
+      
       responseError.value = `後端回傳非音訊 (content-type=${contentType})：${text ? text.substring(0,200) : '無內容'}`
       processState.value = 'error'
       return

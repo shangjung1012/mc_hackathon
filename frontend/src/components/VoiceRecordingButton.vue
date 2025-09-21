@@ -298,10 +298,10 @@ const cleanup = () => {
 }
 
 // 檢測是否為移動設備
-const isMobileDevice = () => {
-  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
-         (navigator.maxTouchPoints && navigator.maxTouchPoints > 2)
-}
+// const isMobileDevice = () => {
+//   return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+//          (navigator.maxTouchPoints && navigator.maxTouchPoints > 2)
+// }
 
 onMounted(() => {
   // 檢查是否在 HTTPS 環境下（移動設備需要）
