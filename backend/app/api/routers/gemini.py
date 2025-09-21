@@ -220,8 +220,14 @@ async def analyze_and_speak(
             )
             
         except Exception as tts_error:
-            logger.error("TTS synthesis failed", error=str(tts_error), exc_info=True)
-            raise HTTPException(status_code=500, detail=f"TTS synthesis failed: {tts_error}")
+            logger.error("TTS synthesis failed, returning text fallback", error=str(tts_error), exc_info=True)
+            # TTS 失敗時，返回 JSON 格式的文字回應，讓前端使用 Web Speech API
+            return {
+                "success": False,
+                "text": speech_text,
+                "tts_error": str(tts_error),
+                "fallback_mode": True
+            }
 
     except HTTPException:
         # 重新拋出 HTTP 異常

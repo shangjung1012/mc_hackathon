@@ -152,6 +152,7 @@
         <div>照片是否已標記為上傳: <strong>{{ lastPhotoUploaded ? '是' : '否' }}</strong></div>
         <div>請求是否已發送: <strong>{{ requestSent ? '是' : '否' }}</strong></div>
         <div>是否收到回覆: <strong>{{ responseReceived ? '是' : '否' }}</strong></div>
+        <div v-if="processState === 'ready-to-speak'" class="text-blue-500">使用 Web Speech API 備用方案</div>
         <div v-if="responseError" class="text-red-500">錯誤: {{ responseError }}</div>
         <div class="mt-2 text-xs text-gray-500">最近狀態訊息: {{ lastCommand }}</div>
       </div>
@@ -182,6 +183,7 @@ import { useCamera, type PhotoCaptureResult } from './services/cameraService'
 import { useVoiceCommand } from './services/voiceCommandService'
 import { useAuth, type User } from './services/authService'
 import { useAPI, type GeminiAnalyzeRequest } from './services/useAPI'
+import { useTextToSpeech } from './services/textToSpeech'
 
 // 登入狀態
 const auth = useAuth()
@@ -190,6 +192,9 @@ const currentUser = ref<User | null>(null)
 
 // API 服務
 const api = useAPI()
+
+// TTS 服務
+const tts = useTextToSpeech()
 
 const isRecording = ref(false)
 const mediaRecorder = ref<MediaRecorder | null>(null)
@@ -310,10 +315,11 @@ const initializeSpeechToText = () => {
     speechToText.setCallbacks({
       onResult: (result: SpeechRecognitionResult) => {
       if (result.isFinal) {
-        transcriptText.value += result.transcript + ' '
+        // 不累加，每次錄音都重新設定顯示文字
+        transcriptText.value = result.transcript
         interimText.value = ''
           
-        // 累積本次錄音 session 的 transcript
+        // 累積本次錄音 session 的 transcript（用於後續處理）
         sessionTranscript.value += result.transcript + ' '
 
         // 處理語音指令
@@ -342,6 +348,12 @@ const initializeSpeechToText = () => {
 const startRecording = async () => {
   try {
     error.value = ''
+    
+    // 重置顯示文字，每次錄音都重新開始
+    transcriptText.value = ''
+    interimText.value = ''
+    sessionTranscript.value = ''
+    
     // Try Permissions API first to give clearer guidance on mobile
     try {
       const perms = (navigator as any).permissions
@@ -605,6 +617,25 @@ const playAudio = async () => {
   }
 }
 
+// 使用 Web Speech API 朗讀文字（TTS 失敗時的備用方案）
+const speakWithWebAPI = async (text: string): Promise<void> => {
+  try {
+    console.log('使用 Web Speech API 備用方案朗讀:', text)
+    processState.value = 'playing'
+    
+    // 使用與 LoginView 相同的 TTS 服務
+    await tts.speak(text)
+    
+    console.log('Web Speech API 朗讀完成')
+    processState.value = 'done'
+  } catch (error) {
+    console.error('Web Speech API 朗讀失敗:', error)
+    processState.value = 'error'
+    responseError.value = `語音合成失敗: ${String(error)}`
+    throw error
+  }
+}
+
 // Auto open camera, capture photo and play beep for swipe events, then go back to main view
 async function autoCaptureForSwipe(_direction: string) {
   try {
@@ -683,6 +714,7 @@ onUnmounted(() => {
   speechToText.destroy()
   camera.destroy()
   voiceCommand.destroy()
+  tts.destroy()
   
   // Clean up audio resources
   if (audioUrl.value) {
@@ -717,6 +749,17 @@ async function processAfterRecording(transcript: string) {
   if (!transcript || transcript.trim().length === 0) {
     console.log('無錄音文字，跳過上傳')
     return
+  }
+
+  // 重新獲取使用者資訊
+  try {
+    const user = await auth.getCurrentUser()
+    if (user) {
+      currentUser.value = user
+      console.log('使用者資訊已更新:', user.username)
+    }
+  } catch (error) {
+    console.warn('重新獲取使用者資訊失敗:', error)
   }
 
   // Decide scenario
@@ -783,6 +826,26 @@ async function processAfterRecording(transcript: string) {
     if (!contentType.includes('audio')) {
       const text = await res.text().catch(() => null)
       console.error('Expected audio but got:', contentType, text)
+      
+      // 嘗試解析 JSON 回應，可能是 TTS 失敗的備用方案
+      try {
+        const jsonResponse = JSON.parse(text || '{}')
+        if (jsonResponse.fallback_mode && jsonResponse.text) {
+          console.log('TTS 失敗，使用 Web Speech API 備用方案')
+          responseReceived.value = true
+          processState.value = 'ready-to-speak'
+          
+          // 使用 Web Speech API 朗讀文字
+          await speakWithWebAPI(jsonResponse.text)
+          processState.value = 'done'
+          lastCommand.value = '使用備用語音合成完成'
+          setTimeout(() => (lastCommand.value = ''), 2000)
+          return
+        }
+      } catch (parseError) {
+        console.debug('無法解析為 JSON，繼續原有錯誤處理')
+      }
+      
       responseError.value = `後端回傳非音訊 (content-type=${contentType})：${text ? text.substring(0,200) : '無內容'}`
       processState.value = 'error'
       return
